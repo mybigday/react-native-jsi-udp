@@ -7,6 +7,7 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.module.annotations.ReactModule;
+import com.facebook.react.turbomodule.core.CallInvokerHolderImpl;
 
 @ReactModule(name = JsiUdpModule.NAME)
 public class JsiUdpModule extends ReactContextBaseJavaModule {
@@ -22,16 +23,27 @@ public class JsiUdpModule extends ReactContextBaseJavaModule {
     return NAME;
   }
 
-  static {
-    System.loadLibrary("cpp");
+  private static native void nativeInstall(long jsiPtr, CallInvokerHolderImpl jsCallInvokerHolder);
+
+  private static native void nativeReset();
+
+  @Override
+  public void invalidate() {
+    super.invalidate();
+    nativeReset();
   }
 
-  private static native double nativeMultiply(double a, double b);
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public boolean install() {
+    try {
+      System.loadLibrary("jsiudp");
 
-  // Example method
-  // See https://reactnative.dev/docs/native-modules-android
-  @ReactMethod
-  public void multiply(double a, double b, Promise promise) {
-    promise.resolve(nativeMultiply(a, b));
+      ReactApplicationContext context = getReactApplicationContext();
+      CallInvokerHolderImpl holder = (CallInvokerHolderImpl) context.getCatalystInstance().getJSCallInvokerHolder();
+      nativeInstall(context.getJavaScriptContextHolder().get(), holder);
+      return true;
+    } catch (Exception exception) {
+      return false;
+    }
   }
 }

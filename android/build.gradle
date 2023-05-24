@@ -1,3 +1,5 @@
+import java.nio.file.Paths
+
 buildscript {
   repositories {
     google()
@@ -7,6 +9,35 @@ buildscript {
   dependencies {
     classpath "com.android.tools.build:gradle:7.2.1"
   }
+}
+
+static def findNodeModules(baseDir) {
+  def basePath = baseDir.toPath().normalize()
+  // Node's module resolution algorithm searches up to the root directory,
+  // after which the base path will be null
+  while (basePath) {
+    def nodeModulesPath = Paths.get(basePath.toString(), "node_modules")
+    def reactNativePath = Paths.get(nodeModulesPath.toString(), "react-native")
+    if (nodeModulesPath.toFile().exists() && reactNativePath.toFile().exists()) {
+      return nodeModulesPath.toString()
+    }
+    basePath = basePath.getParent()
+  }
+  throw new GradleException("VisionCamera: Failed to find node_modules/ path!")
+}
+
+static def findNodeModulePath(baseDir, packageName) {
+    def basePath = baseDir.toPath().normalize()
+    // Node's module resolution algorithm searches up to the root directory,
+    // after which the base path will be null
+    while (basePath) {
+        def candidatePath = Paths.get(basePath.toString(), "node_modules", packageName)
+        if (candidatePath.toFile().exists()) {
+            return candidatePath.toString()
+        }
+        basePath = basePath.getParent()
+    }
+    return null
 }
 
 def isNewArchitectureEnabled() {
@@ -30,6 +61,50 @@ def getExtOrIntegerDefault(name) {
   return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["JsiUdp_" + name]).toInteger()
 }
 
+def reactNativeArchitectures() {
+  def value = project.getProperties().get("reactNativeArchitectures")
+  return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
+}
+
+def nodeModules = findNodeModules(projectDir)
+logger.warn("react-native-skia: node_modules/ found at: ${nodeModules}")
+
+def sourceBuild = false
+def defaultDir
+
+if (rootProject.ext.has('reactNativeAndroidRoot')) {
+  defaultDir = rootProject.ext.get('reactNativeAndroidRoot')
+} else if (findProject(':ReactAndroid') != null) {
+    sourceBuild = true
+    defaultDir = project(':ReactAndroid').projectDir
+} else {
+  defaultDir = file("$nodeModules/react-native")
+}
+
+if (!defaultDir.exists()) {
+  throw new GradleException(
+    "${project.name}: React Native android directory (node_modules/react-native/android) does not exist! Resolved node_modules to: ${nodeModules}"
+  )
+}
+
+def prebuiltDir = sourceBuild
+    ? "$nodeModules/react-native/ReactAndroid/src/main/jni/prebuilt/lib"
+    : "$buildDir/react-native-0*/jni"
+
+
+def buildType = "debug"
+if (gradle.startParameter.taskRequests.args[0].toString().contains("Release")) {
+    buildType = "release"
+} else if (gradle.startParameter.taskRequests.args[0].toString().contains("Debug")) {
+    buildType = "debug"
+}
+
+def reactProperties = new Properties()
+file("$nodeModules/react-native/ReactAndroid/gradle.properties").withInputStream { reactProperties.load(it) }
+def FULL_RN_VERSION =  (System.getenv("REACT_NATIVE_OVERRIDE_VERSION") ?: reactProperties.getProperty("VERSION_NAME"))
+def REACT_NATIVE_VERSION = FULL_RN_VERSION.split("\\.")[1].toInteger()
+def ENABLE_PREFAB = REACT_NATIVE_VERSION > 68
+
 android {
   ndkVersion getExtOrDefault("ndkVersion")
   compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
@@ -40,8 +115,12 @@ android {
     buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
     externalNativeBuild {
       cmake {
-        cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all"
-        abiFilters "x86", "x86_64", "armeabi-v7a", "arm64-v8a"
+        cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all -std=c++17"
+        arguments "-DANDROID_STL=c++_shared",
+          "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}",
+          "-DNODE_MODULES_DIR=${nodeModules}",
+          "-DPREBUILT_DIR=${prebuiltDir}"
+        abiFilters (*reactNativeArchitectures())
       }
     }
   }
@@ -63,6 +142,31 @@ android {
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_1_8
     targetCompatibility JavaVersion.VERSION_1_8
+  }
+
+  buildFeatures {
+    prefab true
+  }
+
+  packagingOptions {
+    doNotStrip buildType == 'debug' ? "**/**/*.so" : ''
+    excludes = [
+      "META-INF",
+      "META-INF/**",
+      "**/libc++_shared.so",
+      "**/libfbjni.so",
+      "**/libjsi.so",
+      "**/libfolly_json.so",
+      "**/libfolly_runtime.so",
+      "**/libglog.so",
+      "**/libhermes.so",
+      "**/libhermes-executor-debug.so",
+      "**/libhermes_executor.so",
+      "**/libreactnativejni.so",
+      "**/libturbomodulejsijni.so",
+      "**/libreact_nativemodule_core.so",
+      "**/libjscexecutor.so",
+    ]
   }
 
 }

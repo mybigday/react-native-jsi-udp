@@ -1,8 +1,11 @@
-#ifndef JSIUDP_H
-#define JSIUDP_H
+#pragma once
+#include <jsi/jsi.h>
+#include <ReactCommon/CallInvoker.h>
 
 namespace jsiudp {
-  double multiply(double a, double b);
-}
+  typedef std::function<void(std::function<void()> &&)> RunOnJS;
 
-#endif /* JSIUDP_H */
+  void install(facebook::jsi::Runtime &jsiRuntime, RunOnJS runOnJS);
+
+  void reset();
+}

@@ -1,18 +1,50 @@
 #import "JsiUdp.h"
 
+#import <React/RCTBridge+Private.h>
+#import <React/RCTBridge.h>
+#import <React/RCTUtils.h>
+#import <ReactCommon/RCTTurboModule.h>
+
 @implementation JsiUdp
+
+@synthesize bridge = _bridge;
+
 RCT_EXPORT_MODULE()
 
-// Example method
-// See // https://reactnative.dev/docs/native-modules-ios
-RCT_REMAP_METHOD(multiply,
-                 multiplyWithA:(double)a withB:(double)b
-                 withResolver:(RCTPromiseResolveBlock)resolve
-                 withRejecter:(RCTPromiseRejectBlock)reject)
-{
-    NSNumber *result = @(jsiudp::multiply(a, b));
+- (void)invalidate {
+  jsiudp::reset();
+  _bridge = nil;
+}
 
-    resolve(result);
+- (void)setBridge:(RCTBridge *)bridge {
+  _bridge = bridge;
+}
+
++ (BOOL)requiresMainQueueSetup {
+  return YES;
+}
+
+void installApi(
+  std::shared_ptr<facebook::react::CallInvoker> callInvoker,
+  facebook::jsi::Runtime *runtime
+) {
+  jsiudp::install(*runtime, [=](std::function<void()> &&f) {
+    callInvoker->invokeAsync(std::move(f));
+  });
+}
+
+RCT_REMAP_METHOD(install)
+{
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
+  if (cxxBridge.runtime != nullptr) {
+    auto callInvoker = cxxBridge.jsCallInvoker;
+    facebook::jsi::Runtime *jsRuntime =
+        (facebook::jsi::Runtime *)cxxBridge.runtime;
+
+    installApi(callInvoker, jsRuntime);
+    return @true;
+  }
+  return @false;
 }
 
 // Don't compile this code when we build for the old architecture.
@@ -20,7 +52,13 @@ RCT_REMAP_METHOD(multiply,
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
     (const facebook::react::ObjCTurboModule::InitParams &)params
 {
-    return std::make_shared<facebook::react::NativeJsiUdpSpecJSI>(params);
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
+  auto callInvoker = cxxBridge.jsCallInvoker;
+  facebook::jsi::Runtime *jsRuntime = (facebook::jsi::Runtime *)cxxBridge.runtime;
+
+  installApi(callInvoker, jsRuntime);
+
+  return std::make_shared<facebook::react::NativeJsiUdpSpecJSI>(params);
 }
 #endif
 

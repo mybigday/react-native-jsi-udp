@@ -1,18 +1,53 @@
 import * as React from 'react';
 
-import { StyleSheet, View, Text } from 'react-native';
-import { multiply } from 'react-native-jsi-udp';
+import { StyleSheet, View, Text, Pressable } from 'react-native';
+import dgram, { Socket } from 'react-native-jsi-udp';
 
 export default function App() {
-  const [result, setResult] = React.useState<number | undefined>();
+  const socket = React.useRef<Socket|undefined>(undefined);
+  const [isBound, setIsBound] = React.useState(false);
+  const [address, setAddress] = React.useState('');
+  const [port, setPort] = React.useState(0);
 
-  React.useEffect(() => {
-    multiply(3, 7).then(setResult);
+  const stop = React.useCallback(() => {
+    if (socket.current) socket.current.close();
+  }, []);
+
+  const start = React.useCallback(() => {
+    if (socket.current) return;
+    socket.current = dgram.createSocket('udp4');
+    socket.current.bind(0, () => {
+      setIsBound(true);
+      const info = socket.current.address();
+      setPort(info.port);
+      setAddress(info.address);
+    });
+    socket.current.on('error', (err) => {
+      console.log('got error', err);
+    });
+    socket.current.on('message', (msg, rinfo) => {
+      socket.current.send(msg, 0, msg.length, rinfo.port, rinfo.address);
+    });
+    socket.current.on('close', () => {
+      setIsBound(false);
+      socket.current = undefined;
+    });
   }, []);
 
   return (
     <View style={styles.container}>
-      <Text>Result: {result}</Text>
+      <Text style={styles.text}>Bound: {isBound ? '(YES)' : '(NO)'}</Text>
+      <Text style={styles.text}>Address: {address}</Text>
+      <Text style={styles.text}>Port: {port}</Text>
+      <Pressable
+        style={({ pressed }) => [
+          styles.box,
+          pressed && styles.pressed,
+        ]}
+        onPress={isBound ? stop : start}
+      >
+        <Text style={styles.text}>{isBound ? 'Stop' : 'Start'}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -24,8 +59,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   box: {
-    width: 60,
-    height: 60,
-    marginVertical: 20,
+    margin: 5,
+    padding: 8,
+    backgroundColor: '#2196F3',
+  },
+  pressed: {
+    opacity: 0.5,
+  },
+  text: {
+    fontSize: 20,
   },
 });

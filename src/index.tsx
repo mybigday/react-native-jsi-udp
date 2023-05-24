@@ -1,4 +1,6 @@
 import { NativeModules, Platform } from 'react-native';
+import { EventEmitter } from 'eventemitter3';
+import { Buffer } from 'buffer';
 
 const LINKING_ERROR =
   `The package 'react-native-jsi-udp' doesn't seem to be linked. Make sure: \n\n` +
@@ -17,6 +19,134 @@ const JsiUdp = NativeModules.JsiUdp
       }
     );
 
-export function multiply(a: number, b: number): Promise<number> {
-  return JsiUdp.multiply(a, b);
+export interface Options {
+  type: 'udp4' | 'udp6';
+  reuseAddr?: boolean;
 }
+
+export enum State {
+  UNBOUND = 0,
+  BOUND = 1,
+  CLOSED = 2,
+}
+
+export type Callback = (...args: any[]) => void;
+
+export class Socket extends EventEmitter {
+  private state: State;
+  private type: 'udp4' | 'udp6';
+  private _fd: number;
+
+  constructor(options: Options, callback?: Callback) {
+    super();
+    if (typeof datagram_create !== 'function') {
+      JsiUdp.install();
+    }
+    this.state = State.UNBOUND;
+    this.type = options.type;
+    this._fd = datagram_create(options.type);
+    if (options.reuseAddr) {
+      datagram_setOpt(this._fd, 'SO_REUSEADDR', 1);
+    }
+    if (callback) this.on('message', callback);
+  }
+
+  bind(port?: number, address?: string|Callback, callback?: Callback) {
+    if (this.state !== State.UNBOUND) {
+      throw new Error('Socket is already bound');
+    }
+    if (typeof address === 'function') {
+      callback = address;
+      address = undefined;
+    }
+    if (callback) this.once('listening', callback!);
+    const defaultAddr = this.type === 'udp4' ? '0.0.0.0' : '::1';
+    datagram_bind(this._fd, address ?? defaultAddr, port ?? 0);
+    this.state = State.BOUND;
+    datagram_startWorker(
+      this._fd,
+      ({ type, family, address: remoteAddr, port: remotePort, data, error }) => {
+        switch (type) {
+          case 'error':
+            this.emit('error', error);
+            break;
+          case 'close':
+            this.state = State.CLOSED;
+            this.emit('close');
+            break;
+          case 'message':
+            this.emit('message', Buffer.from(data), {
+              address: remoteAddr,
+              port: remotePort,
+              family,
+            });
+            break;
+        }
+      }
+    );
+    this.emit('listening');
+  }
+
+  send(
+    data: string | Buffer,
+    offset: number,
+    length: number,
+    port: number,
+    address: string,
+    callback?: Callback
+  ) {
+    let buf: Buffer;
+    if (typeof data === 'string') {
+      buf = Buffer.from(data);
+    } else {
+      buf = data;
+    }
+    buf = buf.slice(offset ?? 0, length ?? buf.length);
+    datagram_send(this._fd, address, port, buf.buffer);
+    callback?.();
+  }
+
+  close(callback?: Callback) {
+    if (this.state === State.CLOSED) {
+      return;
+    }
+    if (callback) this.once('close', callback!);
+    datagram_close(this._fd);
+  }
+
+  address() {
+    return datagram_getSockName(this._fd);
+  }
+
+  setBroadcast(flag: boolean) {
+    datagram_setOpt(this._fd, 'SO_BROADCAST', flag ? 1 : 0);
+  }
+
+  setRecvBufferSize(size: number) {
+    datagram_setOpt(this._fd, 'SO_RCVBUF', size);
+  }
+
+  setSendBufferSize(size: number) {
+    datagram_setOpt(this._fd, 'SO_SNDBUF', size);
+  }
+
+  addMembership(multicastAddress: string, _multicastInterface?: string) {
+    datagram_setOpt(this._fd, 'IP_ADD_MEMBERSHIP', multicastAddress);
+  }
+
+  dropMembership(multicastAddress: string, _multicastInterface?: string) {
+    datagram_setOpt(this._fd, 'IP_DROP_MEMBERSHIP', multicastAddress);
+  }
+}
+
+export function createSocket(options: Options | 'udp4' | 'udp6') {
+  if (typeof options === 'string') {
+    options = { type: options };
+  }
+  return new Socket(options);
+}
+
+export default {
+  createSocket,
+  Socket,
+};
