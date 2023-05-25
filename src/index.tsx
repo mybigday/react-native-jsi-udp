@@ -82,7 +82,7 @@ export class Socket extends EventEmitter {
             this.emit('close');
             break;
           case 'message':
-            this.emit('message', Buffer.from(data), {
+            this.emit('message', Buffer.from(data!), {
               address: remoteAddr,
               port: remotePort,
               family,

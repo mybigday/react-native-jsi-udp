@@ -10,25 +10,25 @@ export default function App() {
   const [port, setPort] = React.useState(0);
 
   const stop = React.useCallback(() => {
-    if (socket.current) socket.current.close();
+    socket.current?.close();
   }, []);
 
   const start = React.useCallback(() => {
     if (socket.current) return;
     socket.current = dgram.createSocket('udp4');
-    socket.current.bind(12345, () => {
+    socket.current!.bind(12345, () => {
       setIsBound(true);
-      const info = socket.current.address();
+      const info = socket.current!.address();
       setPort(info.port);
       setAddress(info.address);
     });
-    socket.current.on('error', (err) => {
+    socket.current!.on('error', (err) => {
       console.log('got error', err);
     });
-    socket.current.on('message', (msg, rinfo) => {
-      socket.current.send(msg, 0, msg.length, rinfo.port, rinfo.address);
+    socket.current!.on('message', (msg, rinfo) => {
+      socket.current?.send(msg, 0, msg.length, rinfo.port, rinfo.address);
     });
-    socket.current.on('close', () => {
+    socket.current!.on('close', () => {
       setIsBound(false);
       socket.current = undefined;
     });
