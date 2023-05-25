@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <net/if.h>
 
 #define MAX_PACK_SIZE 65535
 
@@ -38,7 +39,6 @@ struct Event {
 };
 
 map<int, bool> running;
-map<int, int> inetTypes;
 map<int, shared_ptr<Object>> eventHandlers;
 
 string error_name(int err) {
@@ -122,7 +122,6 @@ void reset() {
     }
   }
   running.clear();
-  inetTypes.clear();
 }
 
 void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
@@ -150,8 +149,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       tv.tv_usec = 100000; // 100ms
       setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
       setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-      inetTypes[fd] = inetType;
 
       return fd;
     }
@@ -237,14 +234,15 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
   auto datagram_bind = Function::createFromHostFunction(
     jsiRuntime,
     PropNameID::forAscii(jsiRuntime, "datagram_bind"),
-    3,
+    4,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
-      auto host = arguments[1].asString(runtime).utf8(runtime);
-      auto port = static_cast<int>(arguments[2].asNumber());
+      auto type = arguments[1].asString(runtime).utf8(runtime);
+      auto host = arguments[2].asString(runtime).utf8(runtime);
+      auto port = static_cast<int>(arguments[3].asNumber());
 
       struct sockaddr_in addr;
-      addr.sin_family = inetTypes.at(fd);
+      addr.sin_family = type == "udp4" ? AF_INET : AF_INET6;
       addr.sin_port = htons(port);
       auto ret = inet_aton(host.c_str(), &addr.sin_addr);
       if (ret == 0) {
@@ -271,7 +269,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
 
       if (running.count(fd) > 0 && running.at(fd)) {
         running[fd] = false;
-        ::close(fd);
       }
 
       return Value::undefined();
@@ -452,15 +449,16 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
   auto datagram_send = Function::createFromHostFunction(
     jsiRuntime,
     PropNameID::forAscii(jsiRuntime, "datagram_send"),
-    4,
+    5,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
-      auto host = arguments[1].asString(runtime).utf8(runtime);
-      auto port = static_cast<int>(arguments[2].asNumber());
-      auto data = arguments[3].asObject(runtime).getArrayBuffer(runtime);
+      auto type = arguments[1].asString(runtime).utf8(runtime);
+      auto host = arguments[2].asString(runtime).utf8(runtime);
+      auto port = static_cast<int>(arguments[3].asNumber());
+      auto data = arguments[4].asObject(runtime).getArrayBuffer(runtime);
 
       struct sockaddr_in addr;
-      addr.sin_family = inetTypes.at(fd);
+      addr.sin_family = type == "udp4" ? AF_INET : AF_INET6;
       addr.sin_port = htons(port);
       auto ret = inet_aton(host.c_str(), &addr.sin_addr);
       if (ret == 0) {

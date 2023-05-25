@@ -61,7 +61,7 @@ export class Socket extends EventEmitter {
     }
     if (callback) this.once('listening', callback!);
     const defaultAddr = this.type === 'udp4' ? '0.0.0.0' : '::1';
-    datagram_bind(this._fd, address ?? defaultAddr, port ?? 0);
+    datagram_bind(this._fd, this.type, address ?? defaultAddr, port ?? 0);
     this.state = State.BOUND;
     datagram_startWorker(
       this._fd,
@@ -110,7 +110,7 @@ export class Socket extends EventEmitter {
     }
     buf = buf.slice(offset ?? 0, length ?? buf.length);
     try {
-      datagram_send(this._fd, address, port, buf.buffer);
+      datagram_send(this._fd, this.type, address, port, buf.buffer);
       callback?.();
     } catch (e) {
       if (callback) callback(e);

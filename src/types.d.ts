@@ -14,7 +14,12 @@ declare function datagram_startWorker(
   listener: (event: datagram_event) => void
 ): void;
 
-declare function datagram_bind(fd: number, host: string, port: number): void;
+declare function datagram_bind(
+  fd: number,
+  type: 'udp4' | 'udp6',
+  host: string,
+  port: number
+): void;
 
 declare function datagram_close(fd: number): void;
 
@@ -29,6 +34,7 @@ declare function datagram_getOpt(fd: number, key: string): number;
 
 declare function datagram_send(
   fd: number,
+  type: 'udp4' | 'udp6',
   host: string,
   port: number,
   data: ArrayBuffer
