@@ -16,7 +16,7 @@ export default function App() {
   const start = React.useCallback(() => {
     if (socket.current) return;
     socket.current = dgram.createSocket('udp4');
-    socket.current.bind(0, () => {
+    socket.current.bind(12345, () => {
       setIsBound(true);
       const info = socket.current.address();
       setPort(info.port);
