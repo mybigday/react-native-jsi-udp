@@ -176,13 +176,16 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         fd,
         [fd, runOnJS, &runtime](Event event) {
           if (eventHandlers.count(fd) == 0) return;
-          runOnJS([&]() {
+          runOnJS([fd, event, &runtime]() {
             auto handler = eventHandlers.at(fd);
             auto eventObj = Object(runtime);
             eventObj.setProperty(
               runtime,
               "type",
-              event.type == MESSAGE ? "message" : event.type == ERROR ? "error" : "close"
+              String::createFromAscii(
+                runtime,
+                event.type == MESSAGE ? "message" : event.type == ERROR ? "error" : "close"
+              )
             );
             if (event.type == MESSAGE) {
               auto ArrayBuffer = runtime.global().getPropertyAsFunction(runtime, "ArrayBuffer");
@@ -191,10 +194,26 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
                 .getObject(runtime);
               auto arrayBuffer = arrayBufferObj.getArrayBuffer(runtime);
               memcpy(arrayBuffer.data(runtime), event.data.c_str(), event.data.size());
-              eventObj.setProperty(runtime, "data", arrayBuffer);
-              eventObj.setProperty(runtime, "family", event.family == AF_INET ? "IPv4" : "IPv6");
-              eventObj.setProperty(runtime, "address", move(event.address));
-              eventObj.setProperty(runtime, "port", static_cast<int>(event.port));
+              eventObj.setProperty(
+                runtime,
+                "data",
+                move(arrayBuffer)
+              );
+              eventObj.setProperty(
+                runtime,
+                "family",
+                String::createFromAscii(runtime, event.family == AF_INET ? "IPv4" : "IPv6")
+              );
+              eventObj.setProperty(
+                runtime,
+                "address",
+                String::createFromAscii(runtime, event.address)
+              );
+              eventObj.setProperty(
+                runtime,
+                "port",
+                static_cast<int>(event.port)
+              );
             } else if (event.type == ERROR) {
               auto Error = runtime.global().getPropertyAsFunction(runtime, "Error");
               auto errorObj = Error
@@ -390,7 +409,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       ret.setProperty(
         runtime,
         "port",
-        Value(static_cast<int>(port))
+        static_cast<int>(port)
       );
       ret.setProperty(
         runtime,
