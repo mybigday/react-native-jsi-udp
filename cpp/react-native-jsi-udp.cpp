@@ -385,6 +385,16 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         }
         break;
       }
+      // IP_BOUND_IF
+      case str2int("IP_BOUND_IF"): {
+        auto value = arguments[2].asString(runtime).utf8(runtime);
+        auto index = if_nametoindex(value.c_str());
+        auto result = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &index, sizeof(index));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
       default:
         throw JSError(runtime, "E_INVALID_OPTION");
       }
