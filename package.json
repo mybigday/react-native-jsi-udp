@@ -41,13 +41,13 @@
     "ios",
     "android"
   ],
-  "repository": "https://github.com/hans00/react-native-jsi-udp",
+  "repository": "https://github.com/mybigday/react-native-jsi-udp",
   "author": "Hans <admin@itsrv.tw> (https://hans00.me)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/hans00/react-native-jsi-udp/issues"
+    "url": "https://github.com/mybigday/react-native-jsi-udp/issues"
   },
-  "homepage": "https://github.com/hans00/react-native-jsi-udp#readme",
+  "homepage": "https://github.com/mybigday/react-native-jsi-udp#readme",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
