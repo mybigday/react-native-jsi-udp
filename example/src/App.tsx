@@ -4,7 +4,7 @@ import { StyleSheet, View, Text, Pressable } from 'react-native';
 import dgram, { Socket } from 'react-native-jsi-udp';
 
 export default function App() {
-  const socket = React.useRef<Socket|undefined>(undefined);
+  const socket = React.useRef<Socket | undefined>(undefined);
   const [isBound, setIsBound] = React.useState(false);
   const [address, setAddress] = React.useState('');
   const [port, setPort] = React.useState(0);
@@ -40,10 +40,7 @@ export default function App() {
       <Text style={styles.text}>Address: {address}</Text>
       <Text style={styles.text}>Port: {port}</Text>
       <Pressable
-        style={({ pressed }) => [
-          styles.box,
-          pressed && styles.pressed,
-        ]}
+        style={({ pressed }) => [styles.box, pressed && styles.pressed]}
         onPress={isBound ? stop : start}
       >
         <Text style={styles.text}>{isBound ? 'Stop' : 'Start'}</Text>

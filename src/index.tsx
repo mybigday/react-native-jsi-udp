@@ -51,7 +51,7 @@ export class Socket extends EventEmitter {
     if (callback) this.on('message', callback);
   }
 
-  bind(port?: number, address?: string|Callback, callback?: Callback) {
+  bind(port?: number, address?: string | Callback, callback?: Callback) {
     if (this.state !== State.UNBOUND) {
       throw new Error('Socket is already bound');
     }
@@ -65,7 +65,14 @@ export class Socket extends EventEmitter {
     this.state = State.BOUND;
     datagram_startWorker(
       this._fd,
-      ({ type, family, address: remoteAddr, port: remotePort, data, error }) => {
+      ({
+        type,
+        family,
+        address: remoteAddr,
+        port: remotePort,
+        data,
+        error,
+      }) => {
         switch (type) {
           case 'error':
             this.emit('error', error);
@@ -144,11 +151,21 @@ export class Socket extends EventEmitter {
   }
 
   addMembership(multicastAddress: string, multicastInterface?: string) {
-    datagram_setOpt(this._fd, 'IP_ADD_MEMBERSHIP', multicastAddress, multicastInterface);
+    datagram_setOpt(
+      this._fd,
+      'IP_ADD_MEMBERSHIP',
+      multicastAddress,
+      multicastInterface
+    );
   }
 
   dropMembership(multicastAddress: string, multicastInterface?: string) {
-    datagram_setOpt(this._fd, 'IP_DROP_MEMBERSHIP', multicastAddress, multicastInterface);
+    datagram_setOpt(
+      this._fd,
+      'IP_DROP_MEMBERSHIP',
+      multicastAddress,
+      multicastInterface
+    );
   }
 
   setMulticastTTL(ttl: number) {
@@ -170,7 +187,6 @@ export class Socket extends EventEmitter {
   unref() {
     return this; // Not implemented
   }
-
 }
 
 export function createSocket(options: Options | 'udp4' | 'udp6') {
