@@ -33,7 +33,7 @@ void installApi(
   });
 }
 
-RCT_REMAP_METHOD(install)
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
 {
   RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
   if (cxxBridge.runtime != nullptr) {
@@ -42,9 +42,9 @@ RCT_REMAP_METHOD(install)
         (facebook::jsi::Runtime *)cxxBridge.runtime;
 
     installApi(callInvoker, jsRuntime);
-    return @true;
+    return @(true);
   }
-  return @false;
+  return @(false);
 }
 
 // Don't compile this code when we build for the old architecture.
