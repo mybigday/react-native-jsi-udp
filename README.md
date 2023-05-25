@@ -1,6 +1,6 @@
 # react-native-jsi-udp
 
-react-native-jsi-udp
+High performance UDP socket for React Native using JSI.
 
 ## Installation
 
@@ -11,11 +11,10 @@ npm install react-native-jsi-udp
 ## Usage
 
 ```js
-import { multiply } from 'react-native-jsi-udp';
+import dgram from 'react-native-jsi-udp';
 
-// ...
-
-const result = await multiply(3, 7);
+// The API is like Node's dgram API
+const socket = dgram.createSocket('udp4');
 ```
 
 ## Contributing
