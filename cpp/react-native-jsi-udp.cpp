@@ -317,7 +317,12 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         auto value = arguments[2].asString(runtime).utf8(runtime);
         struct ip_mreq mreq;
         mreq.imr_multiaddr.s_addr = inet_addr(value.c_str());
-        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        if (arguments[3].isString()) {
+          auto value = arguments[3].asString(runtime).utf8(runtime);
+          mreq.imr_interface.s_addr = inet_addr(value.c_str());
+        } else {
+          mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        }
         auto result = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
@@ -329,8 +334,51 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         auto value = arguments[2].asString(runtime).utf8(runtime);
         struct ip_mreq mreq;
         mreq.imr_multiaddr.s_addr = inet_addr(value.c_str());
-        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        if (arguments[3].isString()) {
+          auto value = arguments[3].asString(runtime).utf8(runtime);
+          mreq.imr_interface.s_addr = inet_addr(value.c_str());
+        } else {
+          mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        }
         auto result = setsockopt(fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
+      // set multicast ttl
+      case str2int("IP_MULTICAST_TTL"): {
+        auto value = static_cast<int>(arguments[2].asNumber());
+        auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
+      // set multicast loop
+      case str2int("IP_MULTICAST_LOOP"): {
+        auto value = static_cast<int>(arguments[2].asNumber());
+        auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
+      // set multicast interface
+      case str2int("IP_MULTICAST_IF"): {
+        auto value = arguments[2].asString(runtime).utf8(runtime);
+        struct in_addr addr;
+        addr.s_addr = inet_addr(value.c_str());
+        auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &addr, sizeof(addr));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
+      // set ttl
+      case str2int("IP_TTL"): {
+        auto value = static_cast<int>(arguments[2].asNumber());
+        auto result = setsockopt(fd, IPPROTO_IP, IP_TTL, &value, sizeof(value));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
         }
@@ -345,6 +393,50 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
   );
   jsiRuntime.global().setProperty(jsiRuntime, "datagram_setOpt", move(datagram_setOpt));
 
+  auto datagram_getOpt = Function::createFromHostFunction(
+    jsiRuntime,
+    PropNameID::forAscii(jsiRuntime, "datagram_getOpt"),
+    2,
+    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
+      auto fd = static_cast<int>(arguments[0].asNumber());
+      auto key = arguments[1].asString(runtime).utf8(runtime);
+
+      switch (str2int(key.c_str())) {
+      case str2int("SO_BROADCAST"): {
+        uint8_t value;
+        socklen_t len = sizeof(value);
+        auto result = getsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, &len);
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        return static_cast<int>(value);
+      }
+      case str2int("SO_RCVBUF"): {
+        uint32_t value;
+        socklen_t len = sizeof(value);
+        auto result = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, &len);
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        return static_cast<int>(value);
+      }
+      case str2int("SO_SNDBUF"): {
+        uint32_t value;
+        socklen_t len = sizeof(value);
+        auto result = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, &len);
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        return static_cast<int>(value);
+      }
+      default:
+        throw JSError(runtime, "E_INVALID_OPTION");
+      }
+
+      return Value::undefined();
+    }
+  );
+  jsiRuntime.global().setProperty(jsiRuntime, "datagram_getOpt", move(datagram_getOpt));
 
   auto datagram_send = Function::createFromHostFunction(
     jsiRuntime,

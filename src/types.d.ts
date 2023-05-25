@@ -16,7 +16,9 @@ function datagram_bind(fd: number, host: string, port: number): void;
 
 function datagram_close(fd: number): void;
 
-function datagram_setOpt(fd: number, key: string, value: number|string): void;
+function datagram_setOpt(fd: number, key: string, value1: number|string, value2?: number|string): void;
+
+function datagram_getOpt(fd: number, key: string): number;
 
 function datagram_send(fd: number, host: string, port: number, data: ArrayBuffer): void;
 

@@ -127,21 +127,50 @@ export class Socket extends EventEmitter {
     datagram_setOpt(this._fd, 'SO_BROADCAST', flag ? 1 : 0);
   }
 
+  getRecvBufferSize() {
+    return datagram_getOpt(this._fd, 'SO_RCVBUF');
+  }
+
   setRecvBufferSize(size: number) {
     datagram_setOpt(this._fd, 'SO_RCVBUF', size);
+  }
+
+  getSendBufferSize() {
+    return datagram_getOpt(this._fd, 'SO_SNDBUF');
   }
 
   setSendBufferSize(size: number) {
     datagram_setOpt(this._fd, 'SO_SNDBUF', size);
   }
 
-  addMembership(multicastAddress: string, _multicastInterface?: string) {
-    datagram_setOpt(this._fd, 'IP_ADD_MEMBERSHIP', multicastAddress);
+  addMembership(multicastAddress: string, multicastInterface?: string) {
+    datagram_setOpt(this._fd, 'IP_ADD_MEMBERSHIP', multicastAddress, multicastInterface);
   }
 
-  dropMembership(multicastAddress: string, _multicastInterface?: string) {
-    datagram_setOpt(this._fd, 'IP_DROP_MEMBERSHIP', multicastAddress);
+  dropMembership(multicastAddress: string, multicastInterface?: string) {
+    datagram_setOpt(this._fd, 'IP_DROP_MEMBERSHIP', multicastAddress, multicastInterface);
   }
+
+  setMulticastTTL(ttl: number) {
+    datagram_setOpt(this._fd, 'IP_MULTICAST_TTL', ttl);
+  }
+
+  setMulticastLoopback(flag: boolean) {
+    datagram_setOpt(this._fd, 'IP_MULTICAST_LOOP', flag ? 1 : 0);
+  }
+
+  setTTL(ttl: number) {
+    datagram_setOpt(this._fd, 'IP_TTL', ttl);
+  }
+
+  ref() {
+    return this; // Not implemented
+  }
+
+  unref() {
+    return this; // Not implemented
+  }
+
 }
 
 export function createSocket(options: Options | 'udp4' | 'udp6') {
