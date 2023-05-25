@@ -38,6 +38,7 @@ struct Event {
   int port;
 };
 
+map<int, thread> workers;
 map<int, bool> running;
 map<int, shared_ptr<Object>> eventHandlers;
 
@@ -109,16 +110,19 @@ void worker_loop(int fd, function<void(Event)> onevent) {
     });
   }
 
+  ::close(fd);
   delete[] buffer;
   onevent({ CLOSE, "", 0, "", 0 });
 }
 
 void reset() {
   eventHandlers.clear();
-  for (auto &kv : running) {
-    if (kv.second) {
-      running[kv.first] = false;
-      ::close(kv.first);
+  for (auto it = running.begin(); it != running.end(); ++it) {
+    auto fd = it->first;
+    if (it->second) {
+      it->second = false;
+      workers[fd].join();
+      workers.erase(fd);
     }
   }
   running.clear();
@@ -165,11 +169,14 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       if (running.count(fd) > 0 && running.at(fd)) {
         throw JSError(runtime, "E_ALREADY_RUNNING");
       }
+      if (workers.count(fd) > 0) {
+        workers.at(fd).detach();
+      }
 
       eventHandlers[fd] = make_shared<Object>(arguments[1].asObject(runtime));
 
       running[fd] = true;
-      auto t = thread(
+      workers[fd] = thread(
         worker_loop,
         fd,
         [fd, runOnJS, &runtime](Event event) {
@@ -223,7 +230,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
           });
         }
       );
-      t.detach();
 
       return Value::undefined();
     }
