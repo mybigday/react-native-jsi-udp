@@ -102,8 +102,13 @@ export class Socket extends EventEmitter {
       buf = data;
     }
     buf = buf.slice(offset ?? 0, length ?? buf.length);
-    datagram_send(this._fd, address, port, buf.buffer);
-    callback?.();
+    try {
+      datagram_send(this._fd, address, port, buf.buffer);
+      callback?.();
+    } catch (e) {
+      if (callback) callback(e);
+      else this.emit('error', e);
+    }
   }
 
   close(callback?: Callback) {
