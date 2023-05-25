@@ -14,7 +14,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#include <net/if.h>
 
 #define MAX_PACK_SIZE 65535
 
@@ -383,16 +382,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       case str2int("IP_TTL"): {
         auto value = static_cast<int>(arguments[2].asNumber());
         auto result = setsockopt(fd, IPPROTO_IP, IP_TTL, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // IP_BOUND_IF
-      case str2int("IP_BOUND_IF"): {
-        auto value = arguments[2].asString(runtime).utf8(runtime);
-        auto index = if_nametoindex(value.c_str());
-        auto result = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &index, sizeof(index));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
         }
