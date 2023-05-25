@@ -10,7 +10,7 @@ npm install react-native-jsi-udp
 
 ### iOS
 
-Add `NSLocalNetworkUsageDescription` to your `Info.plist`:
+Add `NSLocalNetworkUsageDescription` to your `Info.plist` if you need do multicast:
 
 ```xml
 <key>NSLocalNetworkUsageDescription</key>
