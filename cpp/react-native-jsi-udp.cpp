@@ -73,6 +73,18 @@ string error_name(int err) {
       return "ENOTSOCK";
     case ETIMEDOUT:
       return "ETIMEDOUT";
+    case ENOPROTOOPT:
+      return "ENOPROTOOPT";
+    case EINVAL:
+      return "EINVAL";
+    case EDOM:
+      return "EDOM";
+    case ENOMEM:
+      return "ENOMEM";
+    case ENOBUFS:
+      return "ENOBUFS";
+    case EOPNOTSUPP:
+      return "EOPNOTSUPP";
     default:
       return "UNKNOWN";
   }
@@ -292,7 +304,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
 
       switch (str2int(key.c_str())) {
       case str2int("SO_BROADCAST"): {
-        uint8_t value = static_cast<int>(arguments[2].asNumber());
+        int value = static_cast<int>(arguments[2].asNumber());
         auto result = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
@@ -300,7 +312,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         break;
       }
       case str2int("SO_RCVBUF"): {
-        uint32_t value = static_cast<int>(arguments[2].asNumber());
+        int value = static_cast<int>(arguments[2].asNumber());
         auto result = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
@@ -308,7 +320,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         break;
       }
       case str2int("SO_SNDBUF"): {
-        uint32_t value = static_cast<int>(arguments[2].asNumber());
+        int value = static_cast<int>(arguments[2].asNumber());
         auto result = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, sizeof(value));
         if (result < 0) {
           throw JSError(runtime, String::createFromAscii(runtime, error_name(errno)));
@@ -351,7 +363,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       }
       // set multicast ttl
       case str2int("IP_MULTICAST_TTL"): {
-        auto value = static_cast<int>(arguments[2].asNumber());
+        int value = static_cast<int>(arguments[2].asNumber());
         auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
@@ -360,7 +372,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       }
       // set multicast loop
       case str2int("IP_MULTICAST_LOOP"): {
-        auto value = static_cast<int>(arguments[2].asNumber());
+        int value = static_cast<int>(arguments[2].asNumber());
         auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value));
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
