@@ -23,21 +23,7 @@ static def findNodeModules(baseDir) {
     }
     basePath = basePath.getParent()
   }
-  throw new GradleException("VisionCamera: Failed to find node_modules/ path!")
-}
-
-static def findNodeModulePath(baseDir, packageName) {
-    def basePath = baseDir.toPath().normalize()
-    // Node's module resolution algorithm searches up to the root directory,
-    // after which the base path will be null
-    while (basePath) {
-        def candidatePath = Paths.get(basePath.toString(), "node_modules", packageName)
-        if (candidatePath.toFile().exists()) {
-            return candidatePath.toString()
-        }
-        basePath = basePath.getParent()
-    }
-    return null
+  throw new GradleException("jsiudp: Failed to find node_modules/ path!")
 }
 
 def isNewArchitectureEnabled() {
@@ -67,7 +53,7 @@ def reactNativeArchitectures() {
 }
 
 def nodeModules = findNodeModules(projectDir)
-logger.warn("react-native-skia: node_modules/ found at: ${nodeModules}")
+logger.warn("jsiudp: node_modules/ found at: ${nodeModules}")
 
 def sourceBuild = false
 def defaultDir
@@ -82,14 +68,14 @@ if (rootProject.ext.has('reactNativeAndroidRoot')) {
 }
 
 if (!defaultDir.exists()) {
-  throw new GradleException(
-    "${project.name}: React Native android directory (node_modules/react-native/android) does not exist! Resolved node_modules to: ${nodeModules}"
-  )
+    throw new GradleException(
+      "${project.name}: React Native android directory (node_modules/react-native/android) does not exist! Resolved node_modules to: ${nodeModules}"
+    )
 }
 
 def prebuiltDir = sourceBuild
-    ? "$nodeModules/react-native/ReactAndroid/src/main/jni/prebuilt/lib"
-    : "$buildDir/react-native-0*/jni"
+  ? "$nodeModules/react-native/ReactAndroid/src/main/jni/prebuilt/lib"
+  : "$buildDir/react-native-0*/jni"
 
 
 def buildType = "debug"
@@ -103,6 +89,7 @@ def reactProperties = new Properties()
 file("$nodeModules/react-native/ReactAndroid/gradle.properties").withInputStream { reactProperties.load(it) }
 def FULL_RN_VERSION =  (System.getenv("REACT_NATIVE_OVERRIDE_VERSION") ?: reactProperties.getProperty("VERSION_NAME"))
 def REACT_NATIVE_VERSION = FULL_RN_VERSION.split("\\.")[1].toInteger()
+
 def ENABLE_PREFAB = REACT_NATIVE_VERSION > 68
 
 android {
@@ -117,6 +104,7 @@ android {
       cmake {
         cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all -std=c++17"
         arguments "-DANDROID_STL=c++_shared",
+          "-DANDROID_TOOLCHAIN=clang",
           "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}",
           "-DNODE_MODULES_DIR=${nodeModules}",
           "-DPREBUILT_DIR=${prebuiltDir}"
@@ -144,10 +132,6 @@ android {
     targetCompatibility JavaVersion.VERSION_1_8
   }
 
-  buildFeatures {
-    prefab true
-  }
-
   packagingOptions {
     doNotStrip buildType == 'debug' ? "**/**/*.so" : ''
     excludes = [
@@ -169,6 +153,22 @@ android {
     ]
   }
 
+  if (ENABLE_PREFAB) {
+    buildFeatures {
+      prefab true
+      prefabPublishing true
+    }
+    prefab {
+      jsiudp {
+        headers "${project.buildDir}/headers/jsiudp/"
+      }
+    }
+  }
+
+  configurations {
+    extractHeaders
+    extractJNI
+  }
 }
 
 repositories {
@@ -182,6 +182,28 @@ dependencies {
   // For > 0.71, this will be replaced by `com.facebook.react:react-android:$version` by react gradle plugin
   //noinspection GradleDynamicVersion
   implementation "com.facebook.react:react-native:+"
+
+  if (REACT_NATIVE_VERSION < 71) {
+    logger.warn("jsiudp: Extracting files from AAR (pre RN 0.71)")
+    //noinspection GradleDynamicVersion
+    extractHeaders("com.facebook.fbjni:fbjni:0.2.2:headers")
+    //noinspection GradleDynamicVersion
+    extractJNI("com.facebook.fbjni:fbjni:0.2.2")
+  }
+
+  if (!sourceBuild) {
+    def rnAarMatcher = "**/react-native/**/*${buildType}.aar"
+    if (REACT_NATIVE_VERSION < 69) {
+      logger.warn("jsiudp: aar state pre 69. match **/**/*.aar")
+      rnAarMatcher = "**/**/*.aar"
+    } else if (REACT_NATIVE_VERSION >= 71) {
+      logger.warn("jsiudp: aar state post 70, do nothing")
+      return
+    }
+    def rnAAR = fileTree("${nodeModules}/react-native/android").matching({ it.include rnAarMatcher }).singleFile
+    logger.warn("jsiudp: Extracting JNI files (pre RN 0.71) ${rnAAR}")
+    extractJNI(files(rnAAR))
+  }
 }
 
 if (isNewArchitectureEnabled()) {
@@ -190,4 +212,77 @@ if (isNewArchitectureEnabled()) {
     libraryName = "JsiUdp"
     codegenJavaPackageName = "com.jsiudp"
   }
+}
+
+afterEvaluate { project ->
+  task androidSourcesJar(type: Jar) {
+    classifier = 'sources'
+    from android.sourceSets.main.java.srcDirs
+    include '**/*.java'
+  }
+
+  android.libraryVariants.all { variant ->
+    def name = variant.name.capitalize()
+    def javaCompileTask = variant.javaCompileProvider.get()
+
+    task "jar${name}"(type: Jar, dependsOn: javaCompileTask) {
+      from javaCompileTask.destinationDir
+    }
+  }
+
+  artifacts {
+    archives androidSourcesJar
+  }
+}
+
+task extractAARHeaders {
+  doLast {
+    configurations.extractHeaders.files.each {
+      def file = it.absoluteFile
+      copy {
+        from zipTree(file)
+        into "$buildDir/$file.name"
+        include "**/*.h"
+      }
+    }
+  }
+}
+
+task extractJNIFiles {
+  doLast {
+    configurations.extractJNI.files.each {
+      def file = it.absoluteFile
+      copy {
+        from zipTree(file)
+        into "$buildDir/$file.name"
+        include "jni/**/*"
+      }
+    }
+  }
+}
+
+extractJNIFiles.mustRunAfter extractAARHeaders
+
+if (ENABLE_PREFAB) {
+  // Package all the cpp code in a flattened directory structure
+  task prepareHeaders(type: Copy) {
+    from fileTree('../cpp').filter { it.isFile() }
+    into "${project.buildDir}/headers/jsiudp/react-native-jsi-udp/"
+    includeEmptyDirs = false
+  }
+  preBuild.dependsOn(prepareHeaders)
+}
+
+def nativeBuildDependsOn(dependsOnTask, variant) {
+  def buildTasks = tasks.findAll({ task ->
+      !task.name.contains("Clean") && (task.name.contains("externalNative") || task.name.contains("CMake")) })
+  if (variant != null) {
+    buildTasks = buildTasks.findAll({ task -> task.name.contains(variant) })
+  }
+  buildTasks.forEach { task -> task.dependsOn(dependsOnTask) }
+}
+
+afterEvaluate {
+  nativeBuildDependsOn(extractAARHeaders, null)
+  nativeBuildDependsOn(extractJNIFiles, null)
 }
