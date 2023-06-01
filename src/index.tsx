@@ -22,6 +22,7 @@ const JsiUdp = NativeModules.JsiUdp
 export interface Options {
   type: 'udp4' | 'udp6';
   reuseAddr?: boolean;
+  reusePort?: boolean;
 }
 
 export enum State {
@@ -36,6 +37,8 @@ export class Socket extends EventEmitter {
   private state: State;
   private type: 'udp4' | 'udp6';
   private _fd: number;
+  private reuseAddr: boolean;
+  private reusePort: boolean;
 
   constructor(options: Options, callback?: Callback) {
     super();
@@ -44,10 +47,9 @@ export class Socket extends EventEmitter {
     }
     this.state = State.UNBOUND;
     this.type = options.type;
+    this.reuseAddr = options.reuseAddr ?? false;
+    this.reusePort = options.reusePort ?? false;
     this._fd = datagram_create(options.type);
-    if (options.reuseAddr) {
-      datagram_setOpt(this._fd, 'SO_REUSEADDR', 1);
-    }
     if (callback) this.on('message', callback);
   }
 
@@ -61,37 +63,44 @@ export class Socket extends EventEmitter {
     }
     if (callback) this.once('listening', callback!);
     const defaultAddr = this.type === 'udp4' ? '0.0.0.0' : '::1';
-    datagram_bind(this._fd, this.type, address ?? defaultAddr, port ?? 0);
-    this.state = State.BOUND;
-    datagram_startWorker(
-      this._fd,
-      ({
-        type,
-        family,
-        address: remoteAddr,
-        port: remotePort,
-        data,
-        error,
-      }) => {
-        switch (type) {
-          case 'error':
-            this.emit('error', error);
-            break;
-          case 'close':
-            this.state = State.CLOSED;
-            this.emit('close');
-            break;
-          case 'message':
-            this.emit('message', Buffer.from(data!), {
-              address: remoteAddr,
-              port: remotePort,
-              family,
-            });
-            break;
+    try {
+      datagram_setOpt(this._fd, 'SO_REUSEADDR', this.reuseAddr ? 1 : 0);
+      datagram_setOpt(this._fd, 'SO_REUSEPORT', this.reusePort ? 1 : 0);
+      datagram_bind(this._fd, this.type, address ?? defaultAddr, port ?? 0);
+      this.state = State.BOUND;
+      datagram_startWorker(
+        this._fd,
+        ({
+          type,
+          family,
+          address: remoteAddr,
+          port: remotePort,
+          data,
+          error,
+        }) => {
+          switch (type) {
+            case 'error':
+              this.emit('error', error);
+              break;
+            case 'close':
+              this.state = State.CLOSED;
+              this.emit('close');
+              break;
+            case 'message':
+              this.emit('message', Buffer.from(data!), {
+                address: remoteAddr,
+                port: remotePort,
+                family,
+              });
+              break;
+          }
         }
-      }
-    );
-    this.emit('listening');
+      );
+      this.emit('listening');
+    } catch (e) {
+      if (callback) callback(e);
+      else this.emit('error', e);
+    }
   }
 
   send(

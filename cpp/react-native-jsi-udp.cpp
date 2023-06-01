@@ -387,6 +387,24 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         }
         break;
       }
+      // reuse addr
+      case str2int("SO_REUSEADDR"): {
+        auto value = static_cast<int>(arguments[2].asNumber());
+        auto result = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
+      // reuse port
+      case str2int("SO_REUSEPORT"): {
+        auto value = static_cast<int>(arguments[2].asNumber());
+        auto result = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
+        if (result < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        break;
+      }
       default:
         throw JSError(runtime, "E_INVALID_OPTION");
       }
