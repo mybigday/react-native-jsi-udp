@@ -8,6 +8,14 @@ High performance UDP socket for React Native using JSI.
 npm install react-native-jsi-udp
 ```
 
+### Android
+
+Add this rule if you are using ProGuard:
+
+```proguard
+-keep class com.jsiudp.** { *; }
+```
+
 ### iOS
 
 Add `NSLocalNetworkUsageDescription` to your `Info.plist` if you need do multicast:
