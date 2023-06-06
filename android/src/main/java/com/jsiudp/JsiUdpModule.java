@@ -12,6 +12,7 @@ import com.facebook.react.turbomodule.core.CallInvokerHolderImpl;
 @ReactModule(name = JsiUdpModule.NAME)
 public class JsiUdpModule extends ReactContextBaseJavaModule {
   public static final String NAME = "JsiUdp";
+  private boolean mInstalled = false;
 
   public JsiUdpModule(ReactApplicationContext reactContext) {
     super(reactContext);
@@ -30,7 +31,9 @@ public class JsiUdpModule extends ReactContextBaseJavaModule {
   @Override
   public void invalidate() {
     super.invalidate();
-    nativeReset();
+    if (mInstalled) {
+      nativeReset();
+    }
   }
 
   @ReactMethod(isBlockingSynchronousMethod = true)
@@ -41,6 +44,7 @@ public class JsiUdpModule extends ReactContextBaseJavaModule {
       ReactApplicationContext context = getReactApplicationContext();
       CallInvokerHolderImpl holder = (CallInvokerHolderImpl) context.getCatalystInstance().getJSCallInvokerHolder();
       nativeInstall(context.getJavaScriptContextHolder().get(), holder);
+      mInstalled = true;
       return true;
     } catch (Exception exception) {
       return false;
