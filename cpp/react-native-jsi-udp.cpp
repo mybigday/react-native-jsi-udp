@@ -17,15 +17,8 @@
 
 #if __APPLE__
 
-#define LOGI(...) printf("[JsiUdp] INFO: "); printf(__VA_ARGS__); printf("\n")
-#define LOGD(...) printf("[JsiUdp] DEBUG: "); printf(__VA_ARGS__); printf("\n")
-
-#else
-
-#include <android/log.h>
-
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "JsiUdp", __VA_ARGS__)
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "JsiUdp", __VA_ARGS__)
+#import <ifaddrs.h>
+#include <net/if.h>
 
 #endif
 
@@ -197,7 +190,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
           if (ret != 0) {
             throw JSError(runtime, error_name(errno));
           }
-          LOGD("bound to %s", ifa->ifa_name);
+          LOGI("bound to %s for %d", ifa->ifa_name, fd);
           break;
         }
       }
@@ -220,8 +213,9 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         throw JSError(runtime, "E_ALREADY_RUNNING");
       }
       if (workers.count(fd) > 0) {
-        running[fd] = false;
-        workers[fd].join();
+        LOGW("worker already exists, fd = %d, joinable = %d", fd, workers[fd].joinable());
+        if (workers[fd].joinable())
+          workers[fd].join();
       }
 
       eventHandlers[fd] = make_shared<Object>(arguments[1].asObject(runtime));
