@@ -146,6 +146,75 @@ void reset() {
   }
 }
 
+int setupIface(int fd, struct sockaddr_in &addr) {
+  #if __APPLE__
+  struct ifaddrs *ifaddr, *ifa;
+  if (getifaddrs(&ifaddr) == -1) {
+    return -1;
+  }
+  auto isAny = addr.sin_addr.s_addr == INADDR_ANY;
+  auto isLoopback = addr.sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+    if (
+      ifa->ifa_addr != NULL &&
+      ifa->ifa_addr->sa_family == AF_INET &&
+      !((ifa->ifa_flags & IFF_LOOPBACK) ^ isLoopback) &&
+      (ifa->ifa_flags & IFF_UP) &&
+      (
+        isAny ||
+        reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr)->sin_addr.s_addr == addr.sin_addr.s_addr
+      )
+    ) {
+      auto index = if_nametoindex(ifa->ifa_name);
+      if (setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &index, sizeof(index)) != 0) {
+        return -1;
+      }
+      LOGI("bound to %s for %d", ifa->ifa_name, fd);
+      break;
+    }
+  }
+  freeifaddrs(ifaddr);
+  #endif
+  return 0;
+}
+
+int setupIface(int fd, struct sockaddr_in6 &addr) {
+  #if __APPLE__
+  struct ifaddrs *ifaddr, *ifa;
+  if (getifaddrs(&ifaddr) == -1) {
+    return -1;
+  }
+  auto size = sizeof(addr);
+  auto isAny = memcmp(&(addr.sin6_addr), &in6addr_any, size) == 0;
+  auto isLoopback = memcmp(&(addr.sin6_addr), &in6addr_loopback, size) == 0;
+  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+    if (
+      ifa->ifa_addr != NULL &&
+      ifa->ifa_addr->sa_family == AF_INET6 &&
+      !((ifa->ifa_flags & IFF_LOOPBACK) ^ isLoopback) &&
+      (ifa->ifa_flags & IFF_UP) &&
+      (
+        isAny ||
+        memcmp(
+          &(addr.sin6_addr),
+          &(reinterpret_cast<struct sockaddr_in6*>(ifa->ifa_addr)->sin6_addr),
+          size
+        ) == 0
+      )
+    ) {
+      auto index = if_nametoindex(ifa->ifa_name);
+      if (setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &index, sizeof(index)) != 0) {
+        return -1;
+      }
+      LOGI("bound to %s for %d", ifa->ifa_name, fd);
+      break;
+    }
+  }
+  freeifaddrs(ifaddr);
+  #endif
+  return 0;
+}
+
 void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
 
   auto datagram_create = Function::createFromHostFunction(
@@ -171,31 +240,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       tv.tv_usec = 100000; // 100ms
       setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
       setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-      #if __APPLE__
-      struct ifaddrs *ifaddr, *ifa;
-      if (getifaddrs(&ifaddr) == -1) {
-        throw JSError(runtime, error_name(errno));
-      }
-      auto ipLevel = type == 4 ? IPPROTO_IP : IPPROTO_IPV6;
-      for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-        if (
-          ifa->ifa_addr != NULL &&
-          ifa->ifa_addr->sa_family == inetType &&
-          !(ifa->ifa_flags & IFF_LOOPBACK) &&
-          (ifa->ifa_flags & IFF_UP)
-        ) {
-          auto index = if_nametoindex(ifa->ifa_name);
-          auto ret = setsockopt(fd, ipLevel, IP_BOUND_IF, &index, sizeof(index));
-          if (ret != 0) {
-            throw JSError(runtime, error_name(errno));
-          }
-          LOGI("bound to %s for %d", ifa->ifa_name, fd);
-          break;
-        }
-      }
-      freeifaddrs(ifaddr);
-      #endif
 
       return fd;
     }
@@ -299,6 +343,9 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         addr.sin_port = htons(port);
         ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
         if (ret == 1) {
+          if (setupIface(fd, addr) != 0) {
+            throw JSError(runtime, error_name(errno));
+          }
           ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
         }
       } else {
@@ -307,6 +354,9 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         addr.sin6_port = htons(port);
         ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
         if (ret == 1) {
+          if (setupIface(fd, addr) != 0) {
+            throw JSError(runtime, error_name(errno));
+          }
           ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
         }
       }
