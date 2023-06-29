@@ -15,6 +15,25 @@
 #include <netinet/in.h>
 #include <unistd.h>
 
+#if __APPLE__
+
+#define LOGI(...) printf("[JsiUdp] INFO: "); printf(__VA_ARGS__); printf("\n")
+#define LOGD(...) printf("[JsiUdp] DEBUG: "); printf(__VA_ARGS__); printf("\n")
+
+#else
+
+#include <android/log.h>
+
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "JsiUdp", __VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "JsiUdp", __VA_ARGS__)
+
+#endif
+
+#ifndef IPV6_ADD_MEMBERSHIP
+#define IPV6_ADD_MEMBERSHIP     IPV6_JOIN_GROUP
+#define IPV6_DROP_MEMBERSHIP    IPV6_LEAVE_GROUP
+#endif
+
 #define MAX_PACK_SIZE 65535
 
 using namespace facebook::jsi;
@@ -90,10 +109,6 @@ string error_name(int err) {
   }
 }
 
-constexpr unsigned int str2int(const char* str, int h = 0) {
-    return !str[h] ? 5381 : (str2int(str, h+1) * 33) ^ str[h];
-}
-
 void worker_loop(int fd, function<void(Event)> onevent) {
   auto buffer = new char[MAX_PACK_SIZE];
 
@@ -127,16 +142,15 @@ void worker_loop(int fd, function<void(Event)> onevent) {
 }
 
 void reset() {
-  eventHandlers.clear();
   for (auto it = running.begin(); it != running.end(); ++it) {
     auto fd = it->first;
     if (it->second) {
+      eventHandlers.erase(fd);
       it->second = false;
       workers[fd].detach();
       workers.erase(fd);
     }
   }
-  running.clear();
 }
 
 void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
@@ -146,16 +160,16 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
     PropNameID::forAscii(jsiRuntime, "datagram_create"),
     1,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto type = arguments[0].asString(runtime).utf8(runtime);
+      auto type = static_cast<int>(arguments[0].asNumber());
 
-      if (type != "udp4" && type != "udp6") {
+      if (type != 4 && type != 6) {
         throw JSError(runtime, "E_INVALID_TYPE");
       }
 
-      auto inetType = type == "udp4" ? AF_INET : AF_INET6;
+      auto inetType = type == 4 ? AF_INET : AF_INET6;
 
       auto fd = socket(inetType, SOCK_DGRAM, 0);
-      if (fd < 0) {
+      if (fd <= 0) {
         throw JSError(runtime, String::createFromAscii(runtime, error_name(errno)));
       }
 
@@ -182,7 +196,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       }
       if (workers.count(fd) > 0) {
         running[fd] = false;
-        workers.at(fd).join();
+        workers[fd].join();
       }
 
       eventHandlers[fd] = make_shared<Object>(arguments[1].asObject(runtime));
@@ -255,20 +269,30 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
     4,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
-      auto type = arguments[1].asString(runtime).utf8(runtime);
+      auto type = static_cast<int>(arguments[1].asNumber());
       auto host = arguments[2].asString(runtime).utf8(runtime);
       auto port = static_cast<int>(arguments[3].asNumber());
 
-      struct sockaddr_in addr;
-      addr.sin_family = type == "udp4" ? AF_INET : AF_INET6;
-      addr.sin_port = htons(port);
-      auto ret = inet_aton(host.c_str(), &addr.sin_addr);
-      if (ret == 0) {
-        throw JSError(runtime, "E_INVALID_ADDRESS");
+      long ret = 0;
+      if (type == 4) {
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
+        if (ret == 1) {
+          ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+        }
+      } else {
+        struct sockaddr_in6 addr;
+        addr.sin6_family = AF_INET6;
+        addr.sin6_port = htons(port);
+        ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
+        if (ret == 1) {
+          ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+        }
       }
 
-      auto result = ::bind(fd, (struct sockaddr *)&addr, sizeof(addr));
-      if (result < 0) {
+      if (ret < 0) {
         throw JSError(runtime, error_name(errno));
       }
 
@@ -287,6 +311,7 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
 
       if (running.count(fd) > 0 && running.at(fd)) {
         running[fd] = false;
+        workers[fd].join();
       }
 
       return Value::undefined();
@@ -298,128 +323,75 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
   auto datagram_setOpt = Function::createFromHostFunction(
     jsiRuntime,
     PropNameID::forAscii(jsiRuntime, "datagram_setOpt"),
-    3,
+    5,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
-      auto key = arguments[1].asString(runtime).utf8(runtime);
+      auto level = static_cast<int>(arguments[1].asNumber());
+      auto option = static_cast<int>(arguments[2].asNumber());
 
-      switch (str2int(key.c_str())) {
-      case str2int("SO_BROADCAST"): {
-        int value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
+      long result = 0;
+      if (level == SOL_SOCKET) {
+        int value = static_cast<int>(arguments[3].asNumber());
+        result = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
+      } else if (level == IPPROTO_IP) {
+        switch (option) {
+        case IP_TTL:
+        case IP_MULTICAST_TTL:
+        case IP_MULTICAST_LOOP: {
+          int value = static_cast<int>(arguments[3].asNumber());
+          result = setsockopt(fd, IPPROTO_IP, option, &value, sizeof(value));
+          break;
         }
-        break;
-      }
-      case str2int("SO_RCVBUF"): {
-        int value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
+        case IP_ADD_MEMBERSHIP:
+        case IP_DROP_MEMBERSHIP: {
+          struct ip_mreq mreq;
+          mreq.imr_multiaddr.s_addr = inet_addr(arguments[3].asString(runtime).utf8(runtime).c_str());
+          if (arguments[4].isString()) {
+            auto value = arguments[4].asString(runtime).utf8(runtime);
+            mreq.imr_interface.s_addr = inet_addr(value.c_str());
+          } else {
+            mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+          }
+          result = setsockopt(fd, IPPROTO_IP, option, &mreq, sizeof(mreq));
+          LOGD("member of %s", inet_ntoa(mreq.imr_multiaddr));
+          break;
         }
-        break;
-      }
-      case str2int("SO_SNDBUF"): {
-        int value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, String::createFromAscii(runtime, error_name(errno)));
+        default:
+          throw JSError(runtime, "E_INVALID_OPTION");
         }
-        break;
-      }
-      // add membership
-      case str2int("IP_ADD_MEMBERSHIP"): {
-        auto value = arguments[2].asString(runtime).utf8(runtime);
-        struct ip_mreq mreq;
-        mreq.imr_multiaddr.s_addr = inet_addr(value.c_str());
-        if (arguments[3].isString()) {
+      } else if (level == IPPROTO_IPV6) {
+        switch (option) {
+        case IPV6_MULTICAST_HOPS:
+        case IPV6_MULTICAST_LOOP: {
+          int value = static_cast<int>(arguments[3].asNumber());
+          result = setsockopt(fd, IPPROTO_IPV6, option, &value, sizeof(value));
+          break;
+        }
+        case IPV6_ADD_MEMBERSHIP:
+        case IPV6_DROP_MEMBERSHIP: {
+          struct ipv6_mreq mreq;
           auto value = arguments[3].asString(runtime).utf8(runtime);
-          mreq.imr_interface.s_addr = inet_addr(value.c_str());
-        } else {
-          mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+          auto ret = inet_pton(AF_INET6, value.c_str(), &(mreq.ipv6mr_multiaddr));
+          if (ret != 1) {
+            throw JSError(runtime, error_name(errno));
+          }
+          if (arguments[4].isString()) {
+            auto value = arguments[4].asString(runtime).utf8(runtime);
+            inet_pton(AF_INET6, value.c_str(), &(mreq.ipv6mr_interface));
+          } else {
+            mreq.ipv6mr_interface = 0;
+          }
+          result = setsockopt(fd, IPPROTO_IPV6, option, &mreq, sizeof(mreq));
+          break;
         }
-        auto result = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
+        default:
+          throw JSError(runtime, "E_INVALID_OPTION");
         }
-        break;
+      } else {
+        throw JSError(runtime, "E_INVALID_LEVEL");
       }
-      // drop membership
-      case str2int("IP_DROP_MEMBERSHIP"): {
-        auto value = arguments[2].asString(runtime).utf8(runtime);
-        struct ip_mreq mreq;
-        mreq.imr_multiaddr.s_addr = inet_addr(value.c_str());
-        if (arguments[3].isString()) {
-          auto value = arguments[3].asString(runtime).utf8(runtime);
-          mreq.imr_interface.s_addr = inet_addr(value.c_str());
-        } else {
-          mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-        }
-        auto result = setsockopt(fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // set multicast ttl
-      case str2int("IP_MULTICAST_TTL"): {
-        int value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // set multicast loop
-      case str2int("IP_MULTICAST_LOOP"): {
-        int value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // set multicast interface
-      case str2int("IP_MULTICAST_IF"): {
-        auto value = arguments[2].asString(runtime).utf8(runtime);
-        struct in_addr addr;
-        addr.s_addr = inet_addr(value.c_str());
-        auto result = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &addr, sizeof(addr));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // set ttl
-      case str2int("IP_TTL"): {
-        auto value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, IPPROTO_IP, IP_TTL, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // reuse addr
-      case str2int("SO_REUSEADDR"): {
-        auto value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      // reuse port
-      case str2int("SO_REUSEPORT"): {
-        auto value = static_cast<int>(arguments[2].asNumber());
-        auto result = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        break;
-      }
-      default:
-        throw JSError(runtime, "E_INVALID_OPTION");
+      if (result < 0) {
+        throw JSError(runtime, error_name(errno));
       }
 
       return Value::undefined();
@@ -430,41 +402,20 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
   auto datagram_getOpt = Function::createFromHostFunction(
     jsiRuntime,
     PropNameID::forAscii(jsiRuntime, "datagram_getOpt"),
-    2,
+    3,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
-      auto key = arguments[1].asString(runtime).utf8(runtime);
+      auto level = static_cast<int>(arguments[1].asNumber());
+      auto option = static_cast<int>(arguments[2].asNumber());
 
-      switch (str2int(key.c_str())) {
-      case str2int("SO_BROADCAST"): {
-        uint8_t value;
-        socklen_t len = sizeof(value);
-        auto result = getsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, &len);
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        return static_cast<int>(value);
-      }
-      case str2int("SO_RCVBUF"): {
+      if (level == SOL_SOCKET) {
         uint32_t value;
         socklen_t len = sizeof(value);
-        auto result = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, &len);
+        auto result = getsockopt(fd, level, option, &value, &len);
         if (result < 0) {
           throw JSError(runtime, error_name(errno));
         }
         return static_cast<int>(value);
-      }
-      case str2int("SO_SNDBUF"): {
-        uint32_t value;
-        socklen_t len = sizeof(value);
-        auto result = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &value, &len);
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        return static_cast<int>(value);
-      }
-      default:
-        throw JSError(runtime, "E_INVALID_OPTION");
       }
 
       return Value::undefined();
@@ -478,29 +429,53 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
     5,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
-      auto type = arguments[1].asString(runtime).utf8(runtime);
+      auto type = static_cast<int>(arguments[1].asNumber());
       auto host = arguments[2].asString(runtime).utf8(runtime);
       auto port = static_cast<int>(arguments[3].asNumber());
       auto data = arguments[4].asObject(runtime).getArrayBuffer(runtime);
 
-      struct sockaddr_in addr;
-      addr.sin_family = type == "udp4" ? AF_INET : AF_INET6;
-      addr.sin_port = htons(port);
-      auto ret = inet_aton(host.c_str(), &addr.sin_addr);
-      if (ret == 0) {
-        throw JSError(runtime, "E_INVALID_ADDRESS");
+      long ret = 0;
+      if (type == 4) {
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
+        if (ret == 1) {
+          LOGD(
+            "send %s:%d, parsed %X, is broadcast %d",
+            host.c_str(),
+            port,
+            addr.sin_addr.s_addr,
+            INADDR_BROADCAST == addr.sin_addr.s_addr
+          );
+          ret = sendto(
+            fd,
+            data.data(runtime),
+            data.size(runtime),
+            MSG_DONTWAIT,
+            reinterpret_cast<sockaddr*>(&addr),
+            sizeof(addr)
+          );
+          LOGD("send size %d", data.size(runtime));
+        }
+      } else {
+        struct sockaddr_in6 addr;
+        addr.sin6_family = AF_INET6;
+        addr.sin6_port = htons(port);
+        ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
+        if (ret == 1) {
+          ret = sendto(
+            fd,
+            data.data(runtime),
+            data.size(runtime),
+            MSG_DONTWAIT,
+            reinterpret_cast<sockaddr*>(&addr),
+            sizeof(addr)
+          );
+        }
       }
 
-      auto result = sendto(
-        fd,
-        data.data(runtime),
-        data.size(runtime),
-        O_NONBLOCK,
-        (struct sockaddr *)&addr,
-        sizeof(addr)
-      );
-
-      if (result < 0 && errno != EWOULDBLOCK) {
+      if (ret < 0 && errno != EWOULDBLOCK) {
         throw JSError(runtime, error_name(errno));
       }
 
@@ -513,37 +488,63 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
   auto datagram_getSockName = Function::createFromHostFunction(
     jsiRuntime,
     PropNameID::forAscii(jsiRuntime, "datagram_getSockName"),
-    1,
+    2,
     [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
       auto fd = static_cast<int>(arguments[0].asNumber());
+      int type = static_cast<int>(arguments[1].asNumber());
 
-      struct sockaddr_in addr;
-      socklen_t len = sizeof(addr);
-      auto result = getsockname(fd, (struct sockaddr *)&addr, &len);
-      if (result < 0) {
-        throw JSError(runtime, error_name(errno));
+      auto result = Object(runtime);
+      if (type == 4) {
+        struct sockaddr_in addr;
+        socklen_t len = sizeof(addr);
+        auto ret = getsockname(fd, (struct sockaddr *)&addr, &len);
+        if (ret < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        auto host = inet_ntoa(addr.sin_addr);
+        auto port = ntohs(addr.sin_port);
+        result.setProperty(
+          runtime,
+          "address",
+          String::createFromAscii(runtime, host)
+        );
+        result.setProperty(
+          runtime,
+          "port",
+          static_cast<int>(port)
+        );
+        result.setProperty(
+          runtime,
+          "family",
+          String::createFromAscii(runtime, "IPv4")
+        );
+      } else {
+        struct sockaddr_in6 addr;
+        socklen_t len = sizeof(addr);
+        auto ret = getsockname(fd, (struct sockaddr *)&addr, &len);
+        if (ret < 0) {
+          throw JSError(runtime, error_name(errno));
+        }
+        char host[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &addr.sin6_addr, host, INET6_ADDRSTRLEN);
+        auto port = ntohs(addr.sin6_port);
+        result.setProperty(
+          runtime,
+          "address",
+          String::createFromAscii(runtime, host)
+        );
+        result.setProperty(
+          runtime,
+          "port",
+          static_cast<int>(port)
+        );
+        result.setProperty(
+          runtime,
+          "family",
+          String::createFromAscii(runtime, "IPv6")
+        );
       }
-
-      auto host = inet_ntoa(addr.sin_addr);
-      auto port = ntohs(addr.sin_port);
-
-      auto ret = Object(runtime);
-      ret.setProperty(
-        runtime,
-        "address",
-        String::createFromAscii(runtime, host)
-      );
-      ret.setProperty(
-        runtime,
-        "port",
-        static_cast<int>(port)
-      );
-      ret.setProperty(
-        runtime,
-        "family",
-        String::createFromAscii(runtime, addr.sin_family == AF_INET ? "IPv4" : "IPv6")
-      );
-      return ret;
+      return result;
     }
   );
   jsiRuntime.global().setProperty(jsiRuntime, "datagram_getSockName", move(datagram_getSockName));
