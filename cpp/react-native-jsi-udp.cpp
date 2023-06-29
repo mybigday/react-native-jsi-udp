@@ -441,13 +441,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         addr.sin_port = htons(port);
         ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
         if (ret == 1) {
-          LOGD(
-            "send %s:%d, parsed %X, is broadcast %d",
-            host.c_str(),
-            port,
-            addr.sin_addr.s_addr,
-            INADDR_BROADCAST == addr.sin_addr.s_addr
-          );
           ret = sendto(
             fd,
             data.data(runtime),
@@ -456,7 +449,6 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
             reinterpret_cast<sockaddr*>(&addr),
             sizeof(addr)
           );
-          LOGD("send size %d", data.size(runtime));
         }
       } else {
         struct sockaddr_in6 addr;
