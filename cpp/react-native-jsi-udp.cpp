@@ -132,7 +132,7 @@ void reset() {
     auto fd = it->first;
     if (it->second) {
       it->second = false;
-      workers[fd].join();
+      workers[fd].detach();
       workers.erase(fd);
     }
   }
@@ -181,7 +181,8 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
         throw JSError(runtime, "E_ALREADY_RUNNING");
       }
       if (workers.count(fd) > 0) {
-        workers.at(fd).detach();
+        running[fd] = false;
+        workers.at(fd).join();
       }
 
       eventHandlers[fd] = make_shared<Object>(arguments[1].asObject(runtime));
