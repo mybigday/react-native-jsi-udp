@@ -179,6 +179,31 @@ void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
       setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
       setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+      #if __APPLE__
+      struct ifaddrs *ifaddr, *ifa;
+      if (getifaddrs(&ifaddr) == -1) {
+        throw JSError(runtime, error_name(errno));
+      }
+      auto ipLevel = type == 4 ? IPPROTO_IP : IPPROTO_IPV6;
+      for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (
+          ifa->ifa_addr != NULL &&
+          ifa->ifa_addr->sa_family == inetType &&
+          !(ifa->ifa_flags & IFF_LOOPBACK) &&
+          (ifa->ifa_flags & IFF_UP)
+        ) {
+          auto index = if_nametoindex(ifa->ifa_name);
+          auto ret = setsockopt(fd, ipLevel, IP_BOUND_IF, &index, sizeof(index));
+          if (ret != 0) {
+            throw JSError(runtime, error_name(errno));
+          }
+          LOGD("bound to %s", ifa->ifa_name);
+          break;
+        }
+      }
+      freeifaddrs(ifaddr);
+      #endif
+
       return fd;
     }
   );
