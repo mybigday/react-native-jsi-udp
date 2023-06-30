@@ -135,10 +135,10 @@ void worker_loop(int fd, function<void(Event)> onevent) {
 }
 
 void reset() {
+  eventHandlers.clear();
   for (auto it = running.begin(); it != running.end(); ++it) {
     auto fd = it->first;
     if (it->second) {
-      eventHandlers.erase(fd);
       it->second = false;
       workers[fd].detach();
       workers.erase(fd);
