@@ -97,7 +97,16 @@ string error_name(int err) {
       return "ENOBUFS";
     case EOPNOTSUPP:
       return "EOPNOTSUPP";
+    #if __APPLE__
+    case 65:
+      return "No route to host";
+    #endif
+    case EPERM:
+      return "EPERM";
+    case EPIPE:
+      return "EPIPE";
     default:
+      LOGE("unknown error %d", err);
       return "UNKNOWN";
   }
 }
