@@ -16,21 +16,28 @@ export default function App() {
   const start = React.useCallback(() => {
     if (socket.current) return;
     socket.current = dgram.createSocket('udp4');
-    socket.current!.bind(12345, () => {
-      setIsBound(true);
-      const info = socket.current!.address();
-      setPort(info.port);
-      setAddress(info.address);
-    });
     socket.current!.on('error', (err) => {
       console.log('got error', err);
     });
     socket.current!.on('message', (msg, rinfo) => {
+      console.log('got message', msg.toString());
+      if (msg.toString() === 'hello') return;
       socket.current?.send(msg, 0, msg.length, rinfo.port, rinfo.address);
     });
     socket.current!.on('close', () => {
       setIsBound(false);
       socket.current = undefined;
+    });
+    socket.current!.bind(12345, () => {
+      socket.current!.setBroadcast(true);
+      setIsBound(true);
+      const info = socket.current!.address();
+      setPort(info.port);
+      setAddress(info.address);
+      // Send broadcast, on real iOS device may trigger permission dialog
+      socket.current!.send('hello', 0, 5, info.port, '255.255.255.255');
+      // Multicast also
+      socket.current!.send('hello', 0, 5, info.port, '224.0.0.1');
     });
   }, []);
 
@@ -54,6 +61,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#fff',
   },
   box: {
     margin: 5,
