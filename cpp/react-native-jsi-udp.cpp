@@ -1,4 +1,5 @@
 #include "react-native-jsi-udp.h"
+#include "helper.h"
 #include <jsi/jsi.h>
 #include <thread>
 #include <string>
@@ -34,24 +35,6 @@ using namespace facebook::react;
 using namespace std;
 
 namespace jsiudp {
-
-enum EventType {
-  MESSAGE,
-  ERROR,
-  CLOSE
-};
-
-struct Event {
-  EventType type;
-  string data;
-  int family;
-  string address;
-  int port;
-};
-
-map<int, thread> workers;
-map<int, bool> running;
-map<int, shared_ptr<Object>> eventHandlers;
 
 string error_name(int err) {
   switch (err) {
@@ -108,50 +91,6 @@ string error_name(int err) {
     default:
       LOGE("unknown error %d", err);
       return "UNKNOWN";
-  }
-}
-
-void worker_loop(int fd, function<void(Event)> onevent) {
-  auto buffer = new char[MAX_PACK_SIZE];
-
-  while (running.count(fd) > 0 && running.at(fd)) {
-    struct sockaddr_in in_addr;
-    socklen_t in_len = sizeof(in_addr);
-
-    auto recvn = ::recvfrom(fd, buffer, MAX_PACK_SIZE, 0, (struct sockaddr *)&in_addr, &in_len);
-
-    if (recvn < 0) {
-      if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        onevent({ ERROR, error_name(errno), 0, "", 0 });
-        break;
-      } else {
-        continue;
-      }
-    }
-
-    onevent({
-      MESSAGE,
-      string(buffer, recvn),
-      in_addr.sin_family,
-      inet_ntoa(in_addr.sin_addr),
-      ntohs(in_addr.sin_port)
-    });
-  }
-
-  ::close(fd);
-  delete[] buffer;
-  onevent({ CLOSE, "", 0, "", 0 });
-}
-
-void reset() {
-  eventHandlers.clear();
-  for (auto it = running.begin(); it != running.end(); ++it) {
-    auto fd = it->first;
-    if (it->second) {
-      it->second = false;
-      workers[fd].detach();
-      workers.erase(fd);
-    }
   }
 }
 
@@ -224,401 +163,394 @@ int setupIface(int fd, struct sockaddr_in6 &addr) {
   return 0;
 }
 
-void install(Runtime &jsiRuntime, RunOnJS runOnJS) {
+UdpManager::UdpManager(Runtime &jsiRuntime, RunOnJS runOnJS) : _runtime(jsiRuntime), runOnJS(runOnJS) {
+  EXPOSE_FN(jsiRuntime, datagram_create, 1, BIND_METHOD(UdpManager::create));
+  EXPOSE_FN(jsiRuntime, datagram_startWorker, 2, BIND_METHOD(UdpManager::startWorker));
+  EXPOSE_FN(jsiRuntime, datagram_bind, 4, BIND_METHOD(UdpManager::bind));
+  EXPOSE_FN(jsiRuntime, datagram_send, 5, BIND_METHOD(UdpManager::send));
+  EXPOSE_FN(jsiRuntime, datagram_close, 1, BIND_METHOD(UdpManager::close));
+  EXPOSE_FN(jsiRuntime, datagram_getOpt, 3, BIND_METHOD(UdpManager::getOpt));
+  EXPOSE_FN(jsiRuntime, datagram_setOpt, 5, BIND_METHOD(UdpManager::setOpt));
+  EXPOSE_FN(jsiRuntime, datagram_getSockName, 2, BIND_METHOD(UdpManager::getSockName));
+}
 
-  auto datagram_create = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_create"),
-    1,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto type = static_cast<int>(arguments[0].asNumber());
+UdpManager::~UdpManager() {
+  _invalidate = true;
+  for (auto &entry : running) {
+    running[entry.first] = false;
+  }
+  for (auto &entry : workers) {
+    if (entry.second.joinable()) entry.second.detach();
+  }
+}
 
-      if (type != 4 && type != 6) {
-        throw JSError(runtime, "E_INVALID_TYPE");
-      }
+JSI_HOST_FUNCTION(UdpManager::create) {
+  auto type = static_cast<int>(arguments[0].asNumber());
 
-      auto inetType = type == 4 ? AF_INET : AF_INET6;
+  if (type != 4 && type != 6) {
+    throw JSError(runtime, "E_INVALID_TYPE");
+  }
 
-      auto fd = socket(inetType, SOCK_DGRAM, 0);
-      if (fd <= 0) {
-        throw JSError(runtime, String::createFromAscii(runtime, error_name(errno)));
-      }
+  auto inetType = type == 4 ? AF_INET : AF_INET6;
 
-      struct timeval tv;
-      tv.tv_sec = 0;
-      tv.tv_usec = 100000; // 100ms
-      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  auto fd = socket(inetType, SOCK_DGRAM, 0);
+  if (fd <= 0) {
+    throw JSError(runtime, String::createFromAscii(runtime, error_name(errno)));
+  }
 
-      return fd;
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 100000; // 100ms
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  return fd;
+}
+
+JSI_HOST_FUNCTION(UdpManager::startWorker) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto handler = make_shared<Function>(arguments[1].asObject(runtime).asFunction(runtime));
+  if (running.count(fd) > 0 && running[fd]) {
+    throw JSError(runtime, "E_ALREADY_RUNNING");
+  }
+  if (workers.count(fd) > 0) {
+    LOGW("worker already exists, fd = %d, joinable = %d", fd, workers[fd].joinable());
+    if (workers[fd].joinable())
+      workers[fd].join();
+  }
+
+  running[fd] = true;
+  workers[fd] = thread(
+    &UdpManager::workerLoop,
+    this,
+    fd,
+    [this, handler](Event event) {
+      if (_invalidate || runOnJS == nullptr) return;
+      runOnJS([this, handler, event]() {
+        auto eventObj = Object(_runtime);
+        eventObj.setProperty(
+          _runtime,
+          "type",
+          String::createFromAscii(
+            _runtime,
+            event.type == MESSAGE ? "message" : event.type == ERROR ? "error" : "close"
+          )
+        );
+        if (event.type == MESSAGE) {
+          auto ArrayBuffer = _runtime.global().getPropertyAsFunction(_runtime, "ArrayBuffer");
+          auto arrayBufferObj = ArrayBuffer
+            .callAsConstructor(_runtime, static_cast<int>(event.data.size()))
+            .getObject(_runtime);
+          auto arrayBuffer = arrayBufferObj.getArrayBuffer(_runtime);
+          memcpy(arrayBuffer.data(_runtime), event.data.c_str(), event.data.size());
+          eventObj.setProperty(
+            _runtime,
+            "data",
+            move(arrayBuffer)
+          );
+          eventObj.setProperty(
+            _runtime,
+            "family",
+            String::createFromAscii(_runtime, event.family == AF_INET ? "IPv4" : "IPv6")
+          );
+          eventObj.setProperty(
+            _runtime,
+            "address",
+            String::createFromAscii(_runtime, event.address)
+          );
+          eventObj.setProperty(
+            _runtime,
+            "port",
+            static_cast<int>(event.port)
+          );
+        } else if (event.type == ERROR) {
+          auto Error = _runtime.global().getPropertyAsFunction(_runtime, "Error");
+          auto errorObj = Error
+            .callAsConstructor(_runtime, String::createFromAscii(_runtime, event.data))
+            .getObject(_runtime);
+          eventObj.setProperty(_runtime, "error", errorObj);
+        }
+        handler->call(_runtime, eventObj);
+      });
     }
   );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_create", move(datagram_create));
 
+  return Value::undefined();
+}
 
-  auto datagram_startWorker = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_startWorker"),
-    2,
-    [runOnJS](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = static_cast<int>(arguments[0].asNumber());
-      if (running.count(fd) > 0 && running.at(fd)) {
-        throw JSError(runtime, "E_ALREADY_RUNNING");
+JSI_HOST_FUNCTION(UdpManager::bind) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto type = static_cast<int>(arguments[1].asNumber());
+  auto host = arguments[2].asString(runtime).utf8(runtime);
+  auto port = static_cast<int>(arguments[3].asNumber());
+
+  long ret = 0;
+  if (type == 4) {
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
+    if (ret == 1) {
+      if (setupIface(fd, addr) != 0) {
+        throw JSError(runtime, error_name(errno));
       }
-      if (workers.count(fd) > 0) {
-        LOGW("worker already exists, fd = %d, joinable = %d", fd, workers[fd].joinable());
-        if (workers[fd].joinable())
-          workers[fd].join();
+      ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    }
+  } else {
+    struct sockaddr_in6 addr;
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons(port);
+    ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
+    if (ret == 1) {
+      if (setupIface(fd, addr) != 0) {
+        throw JSError(runtime, error_name(errno));
       }
+      ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    }
+  }
 
-      eventHandlers[fd] = make_shared<Object>(arguments[1].asObject(runtime));
+  if (ret < 0) {
+    throw JSError(runtime, error_name(errno));
+  }
 
-      running[fd] = true;
-      workers[fd] = thread(
-        worker_loop,
+  return Value::undefined();
+}
+
+JSI_HOST_FUNCTION(UdpManager::close) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  if (running.count(fd) > 0 && running[fd]) {
+    running[fd] = false;
+    workers[fd].join();
+  }
+  ::close(fd);
+  return Value::undefined();
+}
+
+JSI_HOST_FUNCTION(UdpManager::setOpt) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto level = static_cast<int>(arguments[1].asNumber());
+  auto option = static_cast<int>(arguments[2].asNumber());
+
+  long result = 0;
+  if (level == SOL_SOCKET) {
+    int value = static_cast<int>(arguments[3].asNumber());
+    result = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
+  } else if (level == IPPROTO_IP) {
+    switch (option) {
+    case IP_TTL:
+    case IP_MULTICAST_TTL:
+    case IP_MULTICAST_LOOP: {
+      int value = static_cast<int>(arguments[3].asNumber());
+      result = setsockopt(fd, IPPROTO_IP, option, &value, sizeof(value));
+      break;
+    }
+    case IP_ADD_MEMBERSHIP:
+    case IP_DROP_MEMBERSHIP: {
+      struct ip_mreq mreq;
+      mreq.imr_multiaddr.s_addr = inet_addr(arguments[3].asString(runtime).utf8(runtime).c_str());
+      if (arguments[4].isString()) {
+        auto value = arguments[4].asString(runtime).utf8(runtime);
+        mreq.imr_interface.s_addr = inet_addr(value.c_str());
+      } else {
+        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+      }
+      result = setsockopt(fd, IPPROTO_IP, option, &mreq, sizeof(mreq));
+      LOGD("member of %s", inet_ntoa(mreq.imr_multiaddr));
+      break;
+    }
+    default:
+      throw JSError(runtime, "E_INVALID_OPTION");
+    }
+  } else if (level == IPPROTO_IPV6) {
+    switch (option) {
+    case IPV6_MULTICAST_HOPS:
+    case IPV6_MULTICAST_LOOP: {
+      int value = static_cast<int>(arguments[3].asNumber());
+      result = setsockopt(fd, IPPROTO_IPV6, option, &value, sizeof(value));
+      break;
+    }
+    case IPV6_ADD_MEMBERSHIP:
+    case IPV6_DROP_MEMBERSHIP: {
+      struct ipv6_mreq mreq;
+      auto value = arguments[3].asString(runtime).utf8(runtime);
+      auto ret = inet_pton(AF_INET6, value.c_str(), &(mreq.ipv6mr_multiaddr));
+      if (ret != 1) {
+        throw JSError(runtime, error_name(errno));
+      }
+      if (arguments[4].isString()) {
+        auto value = arguments[4].asString(runtime).utf8(runtime);
+        inet_pton(AF_INET6, value.c_str(), &(mreq.ipv6mr_interface));
+      } else {
+        mreq.ipv6mr_interface = 0;
+      }
+      result = setsockopt(fd, IPPROTO_IPV6, option, &mreq, sizeof(mreq));
+      break;
+    }
+    default:
+      throw JSError(runtime, "E_INVALID_OPTION");
+    }
+  } else {
+    throw JSError(runtime, "E_INVALID_LEVEL");
+  }
+  if (result < 0) {
+    throw JSError(runtime, error_name(errno));
+  }
+
+  return Value::undefined();
+}
+
+JSI_HOST_FUNCTION(UdpManager::getOpt) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto level = static_cast<int>(arguments[1].asNumber());
+  auto option = static_cast<int>(arguments[2].asNumber());
+
+  if (level == SOL_SOCKET) {
+    uint32_t value;
+    socklen_t len = sizeof(value);
+    auto result = getsockopt(fd, level, option, &value, &len);
+    if (result < 0) {
+      throw JSError(runtime, error_name(errno));
+    }
+    return static_cast<int>(value);
+  }
+
+  return Value::undefined();
+}
+
+JSI_HOST_FUNCTION(UdpManager::send) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto type = static_cast<int>(arguments[1].asNumber());
+  auto host = arguments[2].asString(runtime).utf8(runtime);
+  auto port = static_cast<int>(arguments[3].asNumber());
+  auto data = arguments[4].asObject(runtime).getArrayBuffer(runtime);
+
+  long ret = 0;
+  if (type == 4) {
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
+    if (ret == 1) {
+      ret = sendto(
         fd,
-        [fd, runOnJS, &runtime](Event event) {
-          if (eventHandlers.count(fd) == 0) return;
-          runOnJS([fd, event, &runtime]() {
-            auto handler = eventHandlers.at(fd);
-            auto eventObj = Object(runtime);
-            eventObj.setProperty(
-              runtime,
-              "type",
-              String::createFromAscii(
-                runtime,
-                event.type == MESSAGE ? "message" : event.type == ERROR ? "error" : "close"
-              )
-            );
-            if (event.type == MESSAGE) {
-              auto ArrayBuffer = runtime.global().getPropertyAsFunction(runtime, "ArrayBuffer");
-              auto arrayBufferObj = ArrayBuffer
-                .callAsConstructor(runtime, static_cast<int>(event.data.size()))
-                .getObject(runtime);
-              auto arrayBuffer = arrayBufferObj.getArrayBuffer(runtime);
-              memcpy(arrayBuffer.data(runtime), event.data.c_str(), event.data.size());
-              eventObj.setProperty(
-                runtime,
-                "data",
-                move(arrayBuffer)
-              );
-              eventObj.setProperty(
-                runtime,
-                "family",
-                String::createFromAscii(runtime, event.family == AF_INET ? "IPv4" : "IPv6")
-              );
-              eventObj.setProperty(
-                runtime,
-                "address",
-                String::createFromAscii(runtime, event.address)
-              );
-              eventObj.setProperty(
-                runtime,
-                "port",
-                static_cast<int>(event.port)
-              );
-            } else if (event.type == ERROR) {
-              auto Error = runtime.global().getPropertyAsFunction(runtime, "Error");
-              auto errorObj = Error
-                .callAsConstructor(runtime, String::createFromAscii(runtime, event.data))
-                .getObject(runtime);
-              eventObj.setProperty(runtime, "error", errorObj);
-            }
-            handler->asFunction(runtime).call(runtime, eventObj);
-          });
-        }
+        data.data(runtime),
+        data.size(runtime),
+        MSG_DONTWAIT,
+        reinterpret_cast<sockaddr*>(&addr),
+        sizeof(addr)
       );
-
-      return Value::undefined();
     }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_startWorker", move(datagram_startWorker));
+  } else {
+    struct sockaddr_in6 addr;
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons(port);
+    ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
+    if (ret == 1) {
+      ret = sendto(
+        fd,
+        data.data(runtime),
+        data.size(runtime),
+        MSG_DONTWAIT,
+        reinterpret_cast<sockaddr*>(&addr),
+        sizeof(addr)
+      );
+    }
+  }
 
+  if (ret < 0 && errno != EWOULDBLOCK) {
+    throw JSError(runtime, error_name(errno));
+  }
 
-  auto datagram_bind = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_bind"),
-    4,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = static_cast<int>(arguments[0].asNumber());
-      auto type = static_cast<int>(arguments[1].asNumber());
-      auto host = arguments[2].asString(runtime).utf8(runtime);
-      auto port = static_cast<int>(arguments[3].asNumber());
+  return Value::undefined();
+}
 
-      long ret = 0;
-      if (type == 4) {
-        struct sockaddr_in addr;
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
-        ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
-        if (ret == 1) {
-          if (setupIface(fd, addr) != 0) {
-            throw JSError(runtime, error_name(errno));
-          }
-          ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
-        }
+JSI_HOST_FUNCTION(UdpManager::getSockName) {
+  auto fd = static_cast<int>(arguments[0].asNumber());
+  int type = static_cast<int>(arguments[1].asNumber());
+
+  auto result = Object(runtime);
+  if (type == 4) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    auto ret = getsockname(fd, (struct sockaddr *)&addr, &len);
+    if (ret < 0) {
+      throw JSError(runtime, error_name(errno));
+    }
+    auto host = inet_ntoa(addr.sin_addr);
+    auto port = ntohs(addr.sin_port);
+    result.setProperty(
+      runtime,
+      "address",
+      String::createFromAscii(runtime, host)
+    );
+    result.setProperty(
+      runtime,
+      "port",
+      static_cast<int>(port)
+    );
+    result.setProperty(
+      runtime,
+      "family",
+      String::createFromAscii(runtime, "IPv4")
+    );
+  } else {
+    struct sockaddr_in6 addr;
+    socklen_t len = sizeof(addr);
+    auto ret = getsockname(fd, (struct sockaddr *)&addr, &len);
+    if (ret < 0) {
+      throw JSError(runtime, error_name(errno));
+    }
+    char host[INET6_ADDRSTRLEN];
+    inet_ntop(AF_INET6, &addr.sin6_addr, host, INET6_ADDRSTRLEN);
+    auto port = ntohs(addr.sin6_port);
+    result.setProperty(
+      runtime,
+      "address",
+      String::createFromAscii(runtime, host)
+    );
+    result.setProperty(
+      runtime,
+      "port",
+      static_cast<int>(port)
+    );
+    result.setProperty(
+      runtime,
+      "family",
+      String::createFromAscii(runtime, "IPv6")
+    );
+  }
+  return result;
+}
+
+void UdpManager::workerLoop(int fd, function<void(Event)> emitEvent) {
+  auto buffer = new char[MAX_PACK_SIZE];
+
+  while (running.count(fd) > 0 && running.at(fd)) {
+    struct sockaddr_in in_addr;
+    socklen_t in_len = sizeof(in_addr);
+
+    auto recvn = ::recvfrom(fd, buffer, MAX_PACK_SIZE, 0, (struct sockaddr *)&in_addr, &in_len);
+
+    if (recvn < 0) {
+      if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        emitEvent({ ERROR, error_name(errno), 0, "", 0 });
+        break;
       } else {
-        struct sockaddr_in6 addr;
-        addr.sin6_family = AF_INET6;
-        addr.sin6_port = htons(port);
-        ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
-        if (ret == 1) {
-          if (setupIface(fd, addr) != 0) {
-            throw JSError(runtime, error_name(errno));
-          }
-          ret = ::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
-        }
+        continue;
       }
-
-      if (ret < 0) {
-        throw JSError(runtime, error_name(errno));
-      }
-
-      return Value::undefined();
     }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_bind", move(datagram_bind));
 
+    emitEvent({
+      MESSAGE,
+      string(buffer, recvn),
+      in_addr.sin_family,
+      inet_ntoa(in_addr.sin_addr),
+      ntohs(in_addr.sin_port)
+    });
+  }
 
-  auto datagram_close = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_close"),
-    1,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = arguments[0].asNumber();
-
-      if (running.count(fd) > 0 && running.at(fd)) {
-        running[fd] = false;
-        workers[fd].join();
-      }
-
-      return Value::undefined();
-    }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_close", move(datagram_close));
-
-
-  auto datagram_setOpt = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_setOpt"),
-    5,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = static_cast<int>(arguments[0].asNumber());
-      auto level = static_cast<int>(arguments[1].asNumber());
-      auto option = static_cast<int>(arguments[2].asNumber());
-
-      long result = 0;
-      if (level == SOL_SOCKET) {
-        int value = static_cast<int>(arguments[3].asNumber());
-        result = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
-      } else if (level == IPPROTO_IP) {
-        switch (option) {
-        case IP_TTL:
-        case IP_MULTICAST_TTL:
-        case IP_MULTICAST_LOOP: {
-          int value = static_cast<int>(arguments[3].asNumber());
-          result = setsockopt(fd, IPPROTO_IP, option, &value, sizeof(value));
-          break;
-        }
-        case IP_ADD_MEMBERSHIP:
-        case IP_DROP_MEMBERSHIP: {
-          struct ip_mreq mreq;
-          mreq.imr_multiaddr.s_addr = inet_addr(arguments[3].asString(runtime).utf8(runtime).c_str());
-          if (arguments[4].isString()) {
-            auto value = arguments[4].asString(runtime).utf8(runtime);
-            mreq.imr_interface.s_addr = inet_addr(value.c_str());
-          } else {
-            mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-          }
-          result = setsockopt(fd, IPPROTO_IP, option, &mreq, sizeof(mreq));
-          LOGD("member of %s", inet_ntoa(mreq.imr_multiaddr));
-          break;
-        }
-        default:
-          throw JSError(runtime, "E_INVALID_OPTION");
-        }
-      } else if (level == IPPROTO_IPV6) {
-        switch (option) {
-        case IPV6_MULTICAST_HOPS:
-        case IPV6_MULTICAST_LOOP: {
-          int value = static_cast<int>(arguments[3].asNumber());
-          result = setsockopt(fd, IPPROTO_IPV6, option, &value, sizeof(value));
-          break;
-        }
-        case IPV6_ADD_MEMBERSHIP:
-        case IPV6_DROP_MEMBERSHIP: {
-          struct ipv6_mreq mreq;
-          auto value = arguments[3].asString(runtime).utf8(runtime);
-          auto ret = inet_pton(AF_INET6, value.c_str(), &(mreq.ipv6mr_multiaddr));
-          if (ret != 1) {
-            throw JSError(runtime, error_name(errno));
-          }
-          if (arguments[4].isString()) {
-            auto value = arguments[4].asString(runtime).utf8(runtime);
-            inet_pton(AF_INET6, value.c_str(), &(mreq.ipv6mr_interface));
-          } else {
-            mreq.ipv6mr_interface = 0;
-          }
-          result = setsockopt(fd, IPPROTO_IPV6, option, &mreq, sizeof(mreq));
-          break;
-        }
-        default:
-          throw JSError(runtime, "E_INVALID_OPTION");
-        }
-      } else {
-        throw JSError(runtime, "E_INVALID_LEVEL");
-      }
-      if (result < 0) {
-        throw JSError(runtime, error_name(errno));
-      }
-
-      return Value::undefined();
-    }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_setOpt", move(datagram_setOpt));
-
-  auto datagram_getOpt = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_getOpt"),
-    3,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = static_cast<int>(arguments[0].asNumber());
-      auto level = static_cast<int>(arguments[1].asNumber());
-      auto option = static_cast<int>(arguments[2].asNumber());
-
-      if (level == SOL_SOCKET) {
-        uint32_t value;
-        socklen_t len = sizeof(value);
-        auto result = getsockopt(fd, level, option, &value, &len);
-        if (result < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        return static_cast<int>(value);
-      }
-
-      return Value::undefined();
-    }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_getOpt", move(datagram_getOpt));
-
-  auto datagram_send = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_send"),
-    5,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = static_cast<int>(arguments[0].asNumber());
-      auto type = static_cast<int>(arguments[1].asNumber());
-      auto host = arguments[2].asString(runtime).utf8(runtime);
-      auto port = static_cast<int>(arguments[3].asNumber());
-      auto data = arguments[4].asObject(runtime).getArrayBuffer(runtime);
-
-      long ret = 0;
-      if (type == 4) {
-        struct sockaddr_in addr;
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
-        ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
-        if (ret == 1) {
-          ret = sendto(
-            fd,
-            data.data(runtime),
-            data.size(runtime),
-            MSG_DONTWAIT,
-            reinterpret_cast<sockaddr*>(&addr),
-            sizeof(addr)
-          );
-        }
-      } else {
-        struct sockaddr_in6 addr;
-        addr.sin6_family = AF_INET6;
-        addr.sin6_port = htons(port);
-        ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
-        if (ret == 1) {
-          ret = sendto(
-            fd,
-            data.data(runtime),
-            data.size(runtime),
-            MSG_DONTWAIT,
-            reinterpret_cast<sockaddr*>(&addr),
-            sizeof(addr)
-          );
-        }
-      }
-
-      if (ret < 0 && errno != EWOULDBLOCK) {
-        throw JSError(runtime, error_name(errno));
-      }
-
-      return Value::undefined();
-    }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_send", move(datagram_send));
-
-
-  auto datagram_getSockName = Function::createFromHostFunction(
-    jsiRuntime,
-    PropNameID::forAscii(jsiRuntime, "datagram_getSockName"),
-    2,
-    [](Runtime &runtime, const Value &thisValue, const Value *arguments, size_t count) -> Value {
-      auto fd = static_cast<int>(arguments[0].asNumber());
-      int type = static_cast<int>(arguments[1].asNumber());
-
-      auto result = Object(runtime);
-      if (type == 4) {
-        struct sockaddr_in addr;
-        socklen_t len = sizeof(addr);
-        auto ret = getsockname(fd, (struct sockaddr *)&addr, &len);
-        if (ret < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        auto host = inet_ntoa(addr.sin_addr);
-        auto port = ntohs(addr.sin_port);
-        result.setProperty(
-          runtime,
-          "address",
-          String::createFromAscii(runtime, host)
-        );
-        result.setProperty(
-          runtime,
-          "port",
-          static_cast<int>(port)
-        );
-        result.setProperty(
-          runtime,
-          "family",
-          String::createFromAscii(runtime, "IPv4")
-        );
-      } else {
-        struct sockaddr_in6 addr;
-        socklen_t len = sizeof(addr);
-        auto ret = getsockname(fd, (struct sockaddr *)&addr, &len);
-        if (ret < 0) {
-          throw JSError(runtime, error_name(errno));
-        }
-        char host[INET6_ADDRSTRLEN];
-        inet_ntop(AF_INET6, &addr.sin6_addr, host, INET6_ADDRSTRLEN);
-        auto port = ntohs(addr.sin6_port);
-        result.setProperty(
-          runtime,
-          "address",
-          String::createFromAscii(runtime, host)
-        );
-        result.setProperty(
-          runtime,
-          "port",
-          static_cast<int>(port)
-        );
-        result.setProperty(
-          runtime,
-          "family",
-          String::createFromAscii(runtime, "IPv6")
-        );
-      }
-      return result;
-    }
-  );
-  jsiRuntime.global().setProperty(jsiRuntime, "datagram_getSockName", move(datagram_getSockName));
-
+  ::close(fd);
+  delete[] buffer;
+  emitEvent({ CLOSE, "", 0, "", 0 });
 }
 
 } // namespace jsiudp

@@ -1,6 +1,13 @@
 #pragma once
 #include <jsi/jsi.h>
 #include <ReactCommon/CallInvoker.h>
+#include <memory>
+#include <string>
+#include <thread>
+#include <map>
+#include <functional>
+#include <tuple>
+#include "helper.h"
 
 #if __APPLE__
 
@@ -23,7 +30,41 @@
 namespace jsiudp {
   typedef std::function<void(std::function<void()> &&)> RunOnJS;
 
-  void install(facebook::jsi::Runtime &jsiRuntime, RunOnJS runOnJS);
+  enum EventType {
+    MESSAGE,
+    ERROR,
+    CLOSE
+  };
 
-  void reset();
+  struct Event {
+    EventType type;
+    std::string data;
+    int family;
+    std::string address;
+    int port;
+  };
+
+  class UdpManager {
+  public:
+    UdpManager(facebook::jsi::Runtime &jsiRuntime, RunOnJS runOnJS);
+    ~UdpManager();
+
+  protected:
+    facebook::jsi::Runtime &_runtime;
+    RunOnJS runOnJS;
+    std::map<int, std::thread> workers;
+    std::map<int, bool> running;
+    bool _invalidate = false;
+
+    JSI_HOST_FUNCTION(create);
+    JSI_HOST_FUNCTION(send);
+    JSI_HOST_FUNCTION(startWorker);
+    JSI_HOST_FUNCTION(bind);
+    JSI_HOST_FUNCTION(setOpt);
+    JSI_HOST_FUNCTION(getOpt);
+    JSI_HOST_FUNCTION(close);
+    JSI_HOST_FUNCTION(getSockName);
+
+    void workerLoop(int fd, std::function<void(Event)> handler);
+  };
 }

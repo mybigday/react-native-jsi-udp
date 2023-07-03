@@ -1,7 +1,10 @@
+#include <memory>
 #include <jni.h>
 #include <jsi/jsi.h>
 #include <ReactCommon/CallInvokerHolder.h>
 #include "react-native-jsi-udp.h"
+
+std::shared_ptr<jsiudp::UdpManager> manager;
 
 extern "C"
 JNIEXPORT void JNICALL
@@ -13,7 +16,7 @@ Java_com_jsiudp_JsiUdpModule_nativeInstall(JNIEnv *env, jclass _, jlong jsiPtr, 
     }->cthis()->getCallInvoker()
   };
 
-  jsiudp::install(
+  manager = std::make_shared<jsiudp::UdpManager>(
     *runtime,
     [=](std::function<void()> &&f) {
       jsCallInvoker->invokeAsync(std::move(f));
@@ -24,5 +27,5 @@ Java_com_jsiudp_JsiUdpModule_nativeInstall(JNIEnv *env, jclass _, jlong jsiPtr, 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_jsiudp_JsiUdpModule_nativeReset(JNIEnv *env, jclass _) {
-  jsiudp::reset();
+  manager.reset();
 }
