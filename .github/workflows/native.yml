@@ -1,0 +1,76 @@
+name: Native CI
+on:
+  push:
+    paths:
+      - 'ios/**'
+      - 'android/**'
+      - 'cpp/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ios/**'
+      - 'android/**'
+      - 'cpp/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-ios:
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3.6.0
+        with:
+          node-version: 16.x
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+      - uses: actions/cache@v3
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Cache pods
+        uses: actions/cache@v3
+        with:
+          path: |
+            example/ios/Pods
+            example/ios/build
+          key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+      - name: Build example
+        run: |
+          yarn
+          xcodebuild -workspace example/ios/JsiUdpExample.xcworkspace -scheme JsiUdpExample -configuration Debug -sdk iphonesimulator -derivedDataPath example/ios/build
+  test-android:
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3.6.0
+        with:
+          node-version: 16.x
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+      - uses: actions/cache@v3
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Install Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: zulu
+          java-version: 17
+      - name: Build example
+        run: |
+          yarn
+          cd example/android
+          ./gradlew assembleDebug
