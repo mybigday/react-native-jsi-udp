@@ -172,6 +172,24 @@ UdpManager::UdpManager(Runtime &jsiRuntime, RunOnJS runOnJS) : _runtime(jsiRunti
   EXPOSE_FN(jsiRuntime, datagram_getOpt, 3, BIND_METHOD(UdpManager::getOpt));
   EXPOSE_FN(jsiRuntime, datagram_setOpt, 5, BIND_METHOD(UdpManager::setOpt));
   EXPOSE_FN(jsiRuntime, datagram_getSockName, 2, BIND_METHOD(UdpManager::getSockName));
+
+  {
+    auto global = jsiRuntime.global();
+
+    global.setProperty(jsiRuntime, "dgc_SOL_SOCKET", static_cast<int>(SOL_SOCKET));
+    global.setProperty(jsiRuntime, "dgc_IPPROTO_IP", static_cast<int>(IPPROTO_IP));
+    global.setProperty(jsiRuntime, "dgc_IPPROTO_IPV6", static_cast<int>(IPPROTO_IPV6));
+    global.setProperty(jsiRuntime, "dgc_SO_REUSEADDR", static_cast<int>(SO_REUSEADDR));
+    global.setProperty(jsiRuntime, "dgc_SO_REUSEPORT", static_cast<int>(SO_REUSEPORT));
+    global.setProperty(jsiRuntime, "dgc_SO_BROADCAST", static_cast<int>(SO_BROADCAST));
+    global.setProperty(jsiRuntime, "dgc_SO_RCVBUF", static_cast<int>(SO_RCVBUF));
+    global.setProperty(jsiRuntime, "dgc_SO_SNDBUF", static_cast<int>(SO_SNDBUF));
+    global.setProperty(jsiRuntime, "dgc_IP_MULTICAST_TTL", static_cast<int>(IP_MULTICAST_TTL));
+    global.setProperty(jsiRuntime, "dgc_IP_MULTICAST_LOOP", static_cast<int>(IP_MULTICAST_LOOP));
+    global.setProperty(jsiRuntime, "dgc_IP_ADD_MEMBERSHIP", static_cast<int>(IP_ADD_MEMBERSHIP));
+    global.setProperty(jsiRuntime, "dgc_IP_DROP_MEMBERSHIP", static_cast<int>(IP_DROP_MEMBERSHIP));
+    global.setProperty(jsiRuntime, "dgc_IP_TTL", static_cast<int>(IP_TTL));
+  }
 }
 
 UdpManager::~UdpManager() {

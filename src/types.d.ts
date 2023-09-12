@@ -53,3 +53,17 @@ declare function datagram_getSockName(
   address: string;
   port: number;
 };
+
+declare var dgc_SOL_SOCKET: number;
+declare var dgc_IPPROTO_IP: number;
+declare var dgc_IPPROTO_IPV6: number;
+declare var dgc_SO_REUSEADDR: number;
+declare var dgc_SO_REUSEPORT: number;
+declare var dgc_SO_BROADCAST: number;
+declare var dgc_SO_RCVBUF: number;
+declare var dgc_SO_SNDBUF: number;
+declare var dgc_IP_MULTICAST_TTL: number;
+declare var dgc_IP_MULTICAST_LOOP: number;
+declare var dgc_IP_ADD_MEMBERSHIP: number;
+declare var dgc_IP_DROP_MEMBERSHIP: number;
+declare var dgc_IP_TTL: number;

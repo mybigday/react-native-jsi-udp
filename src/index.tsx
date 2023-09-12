@@ -33,23 +33,6 @@ export enum State {
 
 export type Callback = (...args: any[]) => void;
 
-// Level
-const SOL_SOCKET = 0xffff;
-const IPPROTO_IP = 0;
-const IPPROTO_IPV6 = 0x29;
-
-// Option
-const SO_REUSEADDR = 0x4;
-const SO_REUSEPORT = 0x200;
-const SO_BROADCAST = 0x20;
-const SO_RCVBUF = 0x1002;
-const SO_SNDBUF = 0x1001;
-const IP_MULTICAST_TTL = 0xa;
-const IP_MULTICAST_LOOP = 0xb;
-const IP_ADD_MEMBERSHIP = 0xc;
-const IP_DROP_MEMBERSHIP = 0xd;
-const IP_TTL = 0x4;
-
 export class Socket extends EventEmitter {
   private state: State;
   private type: 4 | 6;
@@ -83,14 +66,14 @@ export class Socket extends EventEmitter {
     try {
       datagram_setOpt(
         this._fd,
-        SOL_SOCKET,
-        SO_REUSEADDR,
+        dgc_SOL_SOCKET,
+        dgc_SO_REUSEADDR,
         this.reuseAddr ? 1 : 0
       );
       datagram_setOpt(
         this._fd,
-        SOL_SOCKET,
-        SO_REUSEPORT,
+        dgc_SOL_SOCKET,
+        dgc_SO_REUSEPORT,
         this.reusePort ? 1 : 0
       );
       datagram_bind(this._fd, this.type, address ?? defaultAddr, port ?? 0);
@@ -167,30 +150,30 @@ export class Socket extends EventEmitter {
   }
 
   setBroadcast(flag: boolean) {
-    datagram_setOpt(this._fd, SOL_SOCKET, SO_BROADCAST, flag ? 1 : 0);
+    datagram_setOpt(this._fd, dgc_SOL_SOCKET, dgc_SO_BROADCAST, flag ? 1 : 0);
   }
 
   getRecvBufferSize() {
-    return datagram_getOpt(this._fd, SOL_SOCKET, SO_RCVBUF);
+    return datagram_getOpt(this._fd, dgc_SOL_SOCKET, dgc_SO_RCVBUF);
   }
 
   setRecvBufferSize(size: number) {
-    datagram_setOpt(this._fd, SOL_SOCKET, SO_RCVBUF, size);
+    datagram_setOpt(this._fd, dgc_SOL_SOCKET, dgc_SO_RCVBUF, size);
   }
 
   getSendBufferSize() {
-    return datagram_getOpt(this._fd, SOL_SOCKET, SO_SNDBUF);
+    return datagram_getOpt(this._fd, dgc_SOL_SOCKET, dgc_SO_SNDBUF);
   }
 
   setSendBufferSize(size: number) {
-    datagram_setOpt(this._fd, SOL_SOCKET, SO_SNDBUF, size);
+    datagram_setOpt(this._fd, dgc_SOL_SOCKET, dgc_SO_SNDBUF, size);
   }
 
   addMembership(multicastAddress: string, multicastInterface?: string) {
     datagram_setOpt(
       this._fd,
-      this.type === 4 ? IPPROTO_IP : IPPROTO_IPV6,
-      IP_ADD_MEMBERSHIP,
+      this.type === 4 ? dgc_IPPROTO_IP : dgc_IPPROTO_IPV6,
+      dgc_IP_ADD_MEMBERSHIP,
       multicastAddress,
       multicastInterface
     );
@@ -199,8 +182,8 @@ export class Socket extends EventEmitter {
   dropMembership(multicastAddress: string, multicastInterface?: string) {
     datagram_setOpt(
       this._fd,
-      this.type === 4 ? IPPROTO_IP : IPPROTO_IPV6,
-      IP_DROP_MEMBERSHIP,
+      this.type === 4 ? dgc_IPPROTO_IP : dgc_IPPROTO_IPV6,
+      dgc_IP_DROP_MEMBERSHIP,
       multicastAddress,
       multicastInterface
     );
@@ -209,8 +192,8 @@ export class Socket extends EventEmitter {
   setMulticastTTL(ttl: number) {
     datagram_setOpt(
       this._fd,
-      this.type === 4 ? IPPROTO_IP : IPPROTO_IPV6,
-      IP_MULTICAST_TTL,
+      this.type === 4 ? dgc_IPPROTO_IP : dgc_IPPROTO_IPV6,
+      dgc_IP_MULTICAST_TTL,
       ttl
     );
   }
@@ -218,8 +201,8 @@ export class Socket extends EventEmitter {
   setMulticastLoopback(flag: boolean) {
     datagram_setOpt(
       this._fd,
-      this.type === 4 ? IPPROTO_IP : IPPROTO_IPV6,
-      IP_MULTICAST_LOOP,
+      this.type === 4 ? dgc_IPPROTO_IP : dgc_IPPROTO_IPV6,
+      dgc_IP_MULTICAST_LOOP,
       flag ? 1 : 0
     );
   }
@@ -227,8 +210,8 @@ export class Socket extends EventEmitter {
   setTTL(ttl: number) {
     datagram_setOpt(
       this._fd,
-      this.type === 4 ? IPPROTO_IP : IPPROTO_IPV6,
-      IP_TTL,
+      this.type === 4 ? dgc_IPPROTO_IP : dgc_IPPROTO_IPV6,
+      dgc_IP_TTL,
       ttl
     );
   }
