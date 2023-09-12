@@ -1,5 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
-import { EventEmitter } from 'eventemitter3';
+import { EventEmitter } from 'tseep';
 import { Buffer } from 'buffer';
 
 const LINKING_ERROR =

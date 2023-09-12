@@ -158,6 +158,6 @@
     ]
   },
   "dependencies": {
-    "eventemitter3": "^5.0.1"
+    "tseep": "^1.1.1"
   }
 }
