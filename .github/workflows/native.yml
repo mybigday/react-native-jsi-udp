@@ -5,12 +5,6 @@ on:
       - 'ios/**'
       - 'android/**'
       - 'cpp/**'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'ios/**'
-      - 'android/**'
-      - 'cpp/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
