@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.authors      = package["author"]
 
   s.platforms    = { :ios => "11.0", :tvos => "11.0" }
-  s.source       = { :git => "https://github.com/hans00/react-native-jsi-udp.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/mybigday/react-native-jsi-udp.git", :tag => "#{s.version}" }
 
   s.source_files = "ios/**/*.{h,m,mm}", "cpp/**/*.{h,cpp}"
 
