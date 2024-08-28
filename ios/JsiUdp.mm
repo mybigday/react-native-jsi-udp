@@ -14,11 +14,12 @@ RCT_EXPORT_MODULE()
 std::shared_ptr<jsiudp::UdpManager> _manager;
 
 - (void)invalidate {
-  _manager.reset();
-  _bridge = nil;
+  //NSLog(@"JsiUdp invalidate");
+  _manager->invalidate();
 }
 
 - (void)setBridge:(RCTBridge *)bridge {
+  //NSLog(@"JsiUdp setBridge");
   _bridge = bridge;
 }
 
@@ -36,6 +37,7 @@ void installApi(
       callInvoker->invokeAsync(std::move(f));
     }
   );
+  NSLog(@"JsiUdp installed");
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
