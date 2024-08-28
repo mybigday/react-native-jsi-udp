@@ -7,6 +7,10 @@
 #include <map>
 #include <functional>
 #include <tuple>
+#include <queue>
+#include <condition_variable>
+#include <mutex>
+#include <atomic>
 #include "helper.h"
 
 #if __APPLE__
@@ -37,6 +41,7 @@ namespace jsiudp {
   };
 
   struct Event {
+    int fd;
     EventType type;
     std::string data;
     int family;
@@ -49,12 +54,16 @@ namespace jsiudp {
     UdpManager(facebook::jsi::Runtime &jsiRuntime, RunOnJS runOnJS);
     ~UdpManager();
 
+    void invalidate();
+
   protected:
     facebook::jsi::Runtime &_runtime;
     RunOnJS runOnJS;
     std::map<int, std::thread> workers;
     std::map<int, bool> running;
-    bool _invalidate = false;
+    std::atomic<bool> _invalidate = false;
+    std::thread eventThread;
+    std::map<int, std::shared_ptr<facebook::jsi::Function>> eventHandlers;
 
     JSI_HOST_FUNCTION(create);
     JSI_HOST_FUNCTION(send);
@@ -65,6 +74,13 @@ namespace jsiudp {
     JSI_HOST_FUNCTION(close);
     JSI_HOST_FUNCTION(getSockName);
 
-    void workerLoop(int fd, std::function<void(Event)> handler);
+    void workerLoop(int fd);
+    void sendEvent(Event event);
+    void receiveEvent();
+
+  private:
+    std::condition_variable cond;
+    std::mutex mutex;
+    std::queue<Event> events;
   };
 }
