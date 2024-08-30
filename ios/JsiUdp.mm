@@ -14,12 +14,11 @@ RCT_EXPORT_MODULE()
 std::shared_ptr<jsiudp::UdpManager> _manager;
 
 - (void)invalidate {
-  //NSLog(@"JsiUdp invalidate");
-  _manager->invalidate();
+  if (_manager != nullptr)
+    _manager->invalidate();
 }
 
 - (void)setBridge:(RCTBridge *)bridge {
-  //NSLog(@"JsiUdp setBridge");
   _bridge = bridge;
 }
 
