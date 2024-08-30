@@ -5,6 +5,8 @@ on:
       - 'ios/**'
       - 'android/**'
       - 'cpp/**'
+      - 'example/ios/**'
+      - 'example/android/**'
       - '.github/workflows/native.yml'
 
 concurrency:
@@ -51,6 +53,8 @@ jobs:
       - uses: actions/setup-node@v3.6.0
         with:
           node-version: 16.x
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
       - name: Get yarn cache directory path
         id: yarn-cache-dir-path
         run: echo "::set-output name=dir::$(yarn cache dir)"
@@ -67,6 +71,8 @@ jobs:
           distribution: zulu
           java-version: 17
       - name: Build example
+        env:
+          NDK_CCACHE: ccache
         run: |
           yarn
           cd example/android
