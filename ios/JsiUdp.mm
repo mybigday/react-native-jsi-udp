@@ -14,8 +14,9 @@ RCT_EXPORT_MODULE()
 std::shared_ptr<jsiudp::UdpManager> _manager;
 
 - (void)invalidate {
-  if (_manager != nullptr)
+  if (_manager) {
     _manager->invalidate();
+  }
 }
 
 - (void)setBridge:(RCTBridge *)bridge {
@@ -30,24 +31,14 @@ void installApi(
   std::shared_ptr<facebook::react::CallInvoker> callInvoker,
   facebook::jsi::Runtime *runtime
 ) {
-  _manager = std::make_shared<jsiudp::UdpManager>(
-    *runtime,
-    [=](std::function<void()> &&f) {
-      callInvoker->invokeAsync(std::move(f));
-    }
-  );
-  NSLog(@"JsiUdp installed");
+  _manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(callInvoker));
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
 {
   RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
   if (cxxBridge.runtime != nullptr) {
-    auto callInvoker = cxxBridge.jsCallInvoker;
-    facebook::jsi::Runtime *jsRuntime =
-        (facebook::jsi::Runtime *)cxxBridge.runtime;
-
-    installApi(callInvoker, jsRuntime);
+    installApi(cxxBridge.jsCallInvoker, (facebook::jsi::Runtime *)cxxBridge.runtime);
     return @(true);
   }
   return @(false);
@@ -59,10 +50,7 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
     (const facebook::react::ObjCTurboModule::InitParams &)params
 {
   RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
-  auto callInvoker = cxxBridge.jsCallInvoker;
-  facebook::jsi::Runtime *jsRuntime = (facebook::jsi::Runtime *)cxxBridge.runtime;
-
-  installApi(callInvoker, jsRuntime);
+  installApi(cxxBridge.jsCallInvoker, (facebook::jsi::Runtime *)cxxBridge.runtime);
 
   return std::make_shared<facebook::react::NativeJsiUdpSpecJSI>(params);
 }

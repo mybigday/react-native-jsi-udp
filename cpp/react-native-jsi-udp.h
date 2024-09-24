@@ -32,8 +32,6 @@
 #endif
 
 namespace jsiudp {
-  typedef std::function<void(std::function<void()> &&)> RunOnJS;
-
   enum EventType {
     MESSAGE,
     ERROR,
@@ -51,14 +49,17 @@ namespace jsiudp {
 
   class UdpManager {
   public:
-    UdpManager(facebook::jsi::Runtime &jsiRuntime, RunOnJS runOnJS);
+    UdpManager(
+      facebook::jsi::Runtime *jsiRuntime,
+      std::shared_ptr<facebook::react::CallInvoker> callInvoker
+    );
     ~UdpManager();
 
     void invalidate();
 
   protected:
-    facebook::jsi::Runtime &_runtime;
-    RunOnJS runOnJS;
+    facebook::jsi::Runtime *_runtime;
+    std::shared_ptr<facebook::react::CallInvoker> _callInvoker;
     std::map<int, std::thread> workers;
     std::map<int, bool> running;
     std::atomic<bool> _invalidate = false;
@@ -73,6 +74,8 @@ namespace jsiudp {
     JSI_HOST_FUNCTION(getOpt);
     JSI_HOST_FUNCTION(close);
     JSI_HOST_FUNCTION(getSockName);
+
+    void runOnJS(std::function<void()> &&f);
 
     void workerLoop(int fd);
     void sendEvent(Event event);

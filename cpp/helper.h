@@ -11,12 +11,12 @@
 #define EXPOSE_FN(RUNTIME, NAME, ARGC, FUNCTION) \
   { \
     auto NAME = Function::createFromHostFunction( \
-      RUNTIME, \
-      facebook::jsi::PropNameID::forAscii(RUNTIME, #NAME), \
+      (RUNTIME), \
+      facebook::jsi::PropNameID::forAscii((RUNTIME), #NAME), \
       ARGC, \
       FUNCTION \
     ); \
-    RUNTIME.global().setProperty(RUNTIME, #NAME, std::move(NAME)); \
+    (RUNTIME).global().setProperty((RUNTIME), #NAME, std::move(NAME)); \
   }
 
 #define BIND_METHOD(METHOD) \

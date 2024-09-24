@@ -32,11 +32,10 @@
 
 using namespace facebook::jsi;
 using namespace facebook::react;
-using namespace std;
 
 namespace jsiudp {
 
-string error_name(int err) {
+std::string error_name(int err) {
   switch (err) {
     case EACCES:
       return "EACCES";
@@ -163,54 +162,54 @@ int setupIface(int fd, struct sockaddr_in6 &addr) {
   return 0;
 }
 
-UdpManager::UdpManager(Runtime &jsiRuntime, RunOnJS runOnJS) : _runtime(jsiRuntime), runOnJS(runOnJS) {
-  EXPOSE_FN(jsiRuntime, datagram_create, 1, BIND_METHOD(UdpManager::create));
-  EXPOSE_FN(jsiRuntime, datagram_startWorker, 2, BIND_METHOD(UdpManager::startWorker));
-  EXPOSE_FN(jsiRuntime, datagram_bind, 4, BIND_METHOD(UdpManager::bind));
-  EXPOSE_FN(jsiRuntime, datagram_send, 5, BIND_METHOD(UdpManager::send));
-  EXPOSE_FN(jsiRuntime, datagram_close, 1, BIND_METHOD(UdpManager::close));
-  EXPOSE_FN(jsiRuntime, datagram_getOpt, 3, BIND_METHOD(UdpManager::getOpt));
-  EXPOSE_FN(jsiRuntime, datagram_setOpt, 5, BIND_METHOD(UdpManager::setOpt));
-  EXPOSE_FN(jsiRuntime, datagram_getSockName, 2, BIND_METHOD(UdpManager::getSockName));
+UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInvoker): _runtime(jsiRuntime), _callInvoker(callInvoker) {
+  eventThread = std::thread(&UdpManager::receiveEvent, this);
 
-  {
-    auto global = jsiRuntime.global();
+  EXPOSE_FN(*_runtime, datagram_create, 1, BIND_METHOD(UdpManager::create));
+  EXPOSE_FN(*_runtime, datagram_startWorker, 2, BIND_METHOD(UdpManager::startWorker));
+  EXPOSE_FN(*_runtime, datagram_bind, 4, BIND_METHOD(UdpManager::bind));
+  EXPOSE_FN(*_runtime, datagram_send, 5, BIND_METHOD(UdpManager::send));
+  EXPOSE_FN(*_runtime, datagram_close, 1, BIND_METHOD(UdpManager::close));
+  EXPOSE_FN(*_runtime, datagram_getOpt, 3, BIND_METHOD(UdpManager::getOpt));
+  EXPOSE_FN(*_runtime, datagram_setOpt, 5, BIND_METHOD(UdpManager::setOpt));
+  EXPOSE_FN(*_runtime, datagram_getSockName, 2, BIND_METHOD(UdpManager::getSockName));
 
-    global.setProperty(jsiRuntime, "dgc_SOL_SOCKET", static_cast<int>(SOL_SOCKET));
-    global.setProperty(jsiRuntime, "dgc_IPPROTO_IP", static_cast<int>(IPPROTO_IP));
-    global.setProperty(jsiRuntime, "dgc_IPPROTO_IPV6", static_cast<int>(IPPROTO_IPV6));
-    global.setProperty(jsiRuntime, "dgc_SO_REUSEADDR", static_cast<int>(SO_REUSEADDR));
-    global.setProperty(jsiRuntime, "dgc_SO_REUSEPORT", static_cast<int>(SO_REUSEPORT));
-    global.setProperty(jsiRuntime, "dgc_SO_BROADCAST", static_cast<int>(SO_BROADCAST));
-    global.setProperty(jsiRuntime, "dgc_SO_RCVBUF", static_cast<int>(SO_RCVBUF));
-    global.setProperty(jsiRuntime, "dgc_SO_SNDBUF", static_cast<int>(SO_SNDBUF));
-    global.setProperty(jsiRuntime, "dgc_IP_MULTICAST_TTL", static_cast<int>(IP_MULTICAST_TTL));
-    global.setProperty(jsiRuntime, "dgc_IP_MULTICAST_LOOP", static_cast<int>(IP_MULTICAST_LOOP));
-    global.setProperty(jsiRuntime, "dgc_IP_ADD_MEMBERSHIP", static_cast<int>(IP_ADD_MEMBERSHIP));
-    global.setProperty(jsiRuntime, "dgc_IP_DROP_MEMBERSHIP", static_cast<int>(IP_DROP_MEMBERSHIP));
-    global.setProperty(jsiRuntime, "dgc_IP_TTL", static_cast<int>(IP_TTL));
-  }
-
-  eventThread = thread(&UdpManager::receiveEvent, this);
+  auto global = _runtime->global();
+  global.setProperty(*_runtime, "dgc_SOL_SOCKET", static_cast<int>(SOL_SOCKET));
+  global.setProperty(*_runtime, "dgc_IPPROTO_IP", static_cast<int>(IPPROTO_IP));
+  global.setProperty(*_runtime, "dgc_IPPROTO_IPV6", static_cast<int>(IPPROTO_IPV6));
+  global.setProperty(*_runtime, "dgc_SO_REUSEADDR", static_cast<int>(SO_REUSEADDR));
+  global.setProperty(*_runtime, "dgc_SO_REUSEPORT", static_cast<int>(SO_REUSEPORT));
+  global.setProperty(*_runtime, "dgc_SO_BROADCAST", static_cast<int>(SO_BROADCAST));
+  global.setProperty(*_runtime, "dgc_SO_RCVBUF", static_cast<int>(SO_RCVBUF));
+  global.setProperty(*_runtime, "dgc_SO_SNDBUF", static_cast<int>(SO_SNDBUF));
+  global.setProperty(*_runtime, "dgc_IP_MULTICAST_TTL", static_cast<int>(IP_MULTICAST_TTL));
+  global.setProperty(*_runtime, "dgc_IP_MULTICAST_LOOP", static_cast<int>(IP_MULTICAST_LOOP));
+  global.setProperty(*_runtime, "dgc_IP_ADD_MEMBERSHIP", static_cast<int>(IP_ADD_MEMBERSHIP));
+  global.setProperty(*_runtime, "dgc_IP_DROP_MEMBERSHIP", static_cast<int>(IP_DROP_MEMBERSHIP));
+  global.setProperty(*_runtime, "dgc_IP_TTL", static_cast<int>(IP_TTL));
 }
 
 UdpManager::~UdpManager() {
-  _invalidate = true;
-  runOnJS = nullptr;
-  cond.notify_all();
   invalidate();
-  eventThread.join();
 }
 
 void UdpManager::invalidate() {
-  for (auto &entry : running) {
-     if (entry.second) ::close(entry.first);
-  }
-  running.clear();
+  _invalidate = true;
+  cond.notify_all();
+  if (eventThread.joinable()) eventThread.join();
   for (auto &entry : workers) {
     if (entry.second.joinable()) entry.second.join();
   }
+  running.clear();
   workers.clear();
+  eventHandlers.clear();
+}
+
+void UdpManager::runOnJS(std::function<void()> &&f) {
+  if (_callInvoker) {
+    _callInvoker->invokeAsync(std::move(f));
+  }
 }
 
 JSI_HOST_FUNCTION(UdpManager::create) {
@@ -237,7 +236,7 @@ JSI_HOST_FUNCTION(UdpManager::create) {
 
 JSI_HOST_FUNCTION(UdpManager::startWorker) {
   auto fd = static_cast<int>(arguments[0].asNumber());
-  auto handler = make_shared<Function>(arguments[1].asObject(runtime).asFunction(runtime));
+  auto handler = std::make_shared<Function>(arguments[1].asObject(runtime).asFunction(runtime));
   if (running.count(fd) > 0 && running[fd]) {
     throw JSError(runtime, "E_ALREADY_RUNNING");
   }
@@ -247,9 +246,9 @@ JSI_HOST_FUNCTION(UdpManager::startWorker) {
       workers[fd].join();
   }
 
-  eventHandlers[fd] = move(handler);
+  eventHandlers[fd] = std::move(handler);
   running[fd] = true;
-  workers[fd] = thread(&UdpManager::workerLoop, this, fd);
+  workers[fd] = std::thread(&UdpManager::workerLoop, this, fd);
 
   return Value::undefined();
 }
@@ -502,7 +501,7 @@ void UdpManager::receiveEvent() {
   while (!_invalidate) {
     std::unique_lock<std::mutex> lock(mutex);
     cond.wait(lock, [this] { return _invalidate || !events.empty(); });
-    if (_invalidate || runOnJS == nullptr) {
+    if (_invalidate) {
       break;
     }
     auto event = events.front();
@@ -511,50 +510,50 @@ void UdpManager::receiveEvent() {
     if (eventHandlers.count(event.fd) > 0) {
       runOnJS([this, &event]() {
         auto handler = eventHandlers[event.fd];
-        auto eventObj = Object(_runtime);
+        auto eventObj = Object(*_runtime);
         eventObj.setProperty(
-          _runtime,
+          *_runtime,
           "type",
           String::createFromAscii(
-            _runtime,
+            *_runtime,
             event.type == MESSAGE ? "message" : event.type == ERROR ? "error" : "close"
           )
         );
         if (event.type == MESSAGE) {
-          auto ArrayBuffer = _runtime.global().getPropertyAsFunction(_runtime, "ArrayBuffer");
+          auto ArrayBuffer = _runtime->global().getPropertyAsFunction(*_runtime, "ArrayBuffer");
           auto arrayBufferObj = ArrayBuffer
-            .callAsConstructor(_runtime, static_cast<int>(event.data.size()))
-            .getObject(_runtime);
-          auto arrayBuffer = arrayBufferObj.getArrayBuffer(_runtime);
-          memcpy(arrayBuffer.data(_runtime), event.data.c_str(), event.data.size());
+            .callAsConstructor(*_runtime, static_cast<int>(event.data.size()))
+            .getObject(*_runtime);
+          auto arrayBuffer = arrayBufferObj.getArrayBuffer(*_runtime);
+          memcpy(arrayBuffer.data(*_runtime), event.data.c_str(), event.data.size());
           eventObj.setProperty(
-            _runtime,
+            *_runtime,
             "data",
-            move(arrayBuffer)
+            std::move(arrayBuffer)
           );
           eventObj.setProperty(
-            _runtime,
+            *_runtime,
             "family",
-            String::createFromAscii(_runtime, event.family == AF_INET ? "IPv4" : "IPv6")
+            String::createFromAscii(*_runtime, event.family == AF_INET ? "IPv4" : "IPv6")
           );
           eventObj.setProperty(
-            _runtime,
+            *_runtime,
             "address",
-            String::createFromAscii(_runtime, event.address)
+            String::createFromAscii(*_runtime, event.address)
           );
           eventObj.setProperty(
-            _runtime,
+            *_runtime,
             "port",
             static_cast<int>(event.port)
           );
         } else if (event.type == ERROR) {
-          auto Error = _runtime.global().getPropertyAsFunction(_runtime, "Error");
+          auto Error = _runtime->global().getPropertyAsFunction(*_runtime, "Error");
           auto errorObj = Error
-            .callAsConstructor(_runtime, String::createFromAscii(_runtime, event.data))
-            .getObject(_runtime);
-          eventObj.setProperty(_runtime, "error", errorObj);
+            .callAsConstructor(*_runtime, String::createFromAscii(*_runtime, event.data))
+            .getObject(*_runtime);
+          eventObj.setProperty(*_runtime, "error", errorObj);
         }
-        handler->call(_runtime, eventObj);
+        handler->call(*_runtime, eventObj);
       });
     }
   }
@@ -588,7 +587,7 @@ void UdpManager::workerLoop(int fd) {
     sendEvent({
       fd,
       MESSAGE,
-      string(buffer, recvn),
+      std::string(buffer, recvn),
       in_addr.sin_family,
       inet_ntoa(in_addr.sin_addr),
       ntohs(in_addr.sin_port)
@@ -596,9 +595,7 @@ void UdpManager::workerLoop(int fd) {
   }
 
   ::close(fd);
-  if (!_invalidate) {
-    sendEvent({ fd, CLOSE, "", 0, "", 0 });
-  }
+  sendEvent({ fd, CLOSE, "", 0, "", 0 });
   delete[] buffer;
 }
 
