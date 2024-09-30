@@ -5,7 +5,6 @@
 #include "react-native-jsi-udp.h"
 
 std::shared_ptr<jsiudp::UdpManager> manager;
-std::map<int, std::shared_ptr<facebook::jsi::Function>> eventHandlers;
 
 extern "C"
 JNIEXPORT void JNICALL
@@ -24,5 +23,4 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_jsiudp_JsiUdpModule_nativeReset(JNIEnv *env, jclass _) {
   manager.reset();
-  eventHandlers.clear();
 }

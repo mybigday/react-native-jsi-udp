@@ -50,6 +50,31 @@ export class Socket extends EventEmitter {
     this.reuseAddr = options.reuseAddr ?? false;
     this.reusePort = options.reusePort ?? false;
     this._fd = datagram_create(this.type);
+    datagram_callbacks[String(this._fd)] = ({
+      type,
+      family,
+      address: remoteAddr,
+      port: remotePort,
+      data,
+      error,
+    }) => {
+      switch (type) {
+        case 'error':
+          this.emit('error', error);
+          break;
+        case 'close':
+          this.state = State.CLOSED;
+          this.emit('close');
+          break;
+        case 'message':
+          this.emit('message', Buffer.from(data!), {
+            address: remoteAddr,
+            port: remotePort,
+            family,
+          });
+          break;
+      }
+    };
     if (callback) this.on('message', callback);
   }
 
@@ -78,34 +103,6 @@ export class Socket extends EventEmitter {
       );
       datagram_bind(this._fd, this.type, address ?? defaultAddr, port ?? 0);
       this.state = State.BOUND;
-      datagram_startWorker(
-        this._fd,
-        ({
-          type,
-          family,
-          address: remoteAddr,
-          port: remotePort,
-          data,
-          error,
-        }) => {
-          switch (type) {
-            case 'error':
-              this.emit('error', error);
-              break;
-            case 'close':
-              this.state = State.CLOSED;
-              this.emit('close');
-              break;
-            case 'message':
-              this.emit('message', Buffer.from(data!), {
-                address: remoteAddr,
-                port: remotePort,
-                family,
-              });
-              break;
-          }
-        }
-      );
       this.emit('listening');
     } catch (e) {
       if (callback) callback(e);
@@ -141,6 +138,7 @@ export class Socket extends EventEmitter {
     if (this.state === State.CLOSED) {
       return;
     }
+    delete datagram_callbacks[String(this._fd)];
     if (callback) this.once('close', callback!);
     datagram_close(this._fd);
   }

@@ -49,11 +49,7 @@ namespace jsiudp {
 
   class UdpManager {
   public:
-    UdpManager(
-      facebook::jsi::Runtime *jsiRuntime,
-      std::shared_ptr<facebook::react::CallInvoker> callInvoker,
-      std::map<int, std::shared_ptr<facebook::jsi::Function>> &eventHandlers
-    );
+    UdpManager(facebook::jsi::Runtime *jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> callInvoker);
     ~UdpManager();
 
     void closeAll();
@@ -63,11 +59,9 @@ namespace jsiudp {
     std::shared_ptr<facebook::react::CallInvoker> _callInvoker;
     std::atomic<bool> _invalidate = false;
     std::thread eventThread;
-    std::map<int, std::shared_ptr<facebook::jsi::Function>> &_eventHandlers;
 
     JSI_HOST_FUNCTION(create);
     JSI_HOST_FUNCTION(send);
-    JSI_HOST_FUNCTION(startWorker);
     JSI_HOST_FUNCTION(bind);
     JSI_HOST_FUNCTION(setOpt);
     JSI_HOST_FUNCTION(getOpt);

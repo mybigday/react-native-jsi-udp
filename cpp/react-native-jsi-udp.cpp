@@ -168,11 +168,10 @@ int setupIface(int fd, struct sockaddr_in6 &addr) {
   return 0;
 }
 
-UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInvoker, std::map<int, std::shared_ptr<facebook::jsi::Function>> &eventHandlers): _runtime(jsiRuntime), _callInvoker(callInvoker), _eventHandlers(eventHandlers) {
+UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInvoker): _runtime(jsiRuntime), _callInvoker(callInvoker) {
   eventThread = std::thread(&UdpManager::receiveEvent, this);
 
   EXPOSE_FN(*_runtime, datagram_create, 1, BIND_METHOD(UdpManager::create));
-  EXPOSE_FN(*_runtime, datagram_startWorker, 2, BIND_METHOD(UdpManager::startWorker));
   EXPOSE_FN(*_runtime, datagram_bind, 4, BIND_METHOD(UdpManager::bind));
   EXPOSE_FN(*_runtime, datagram_send, 5, BIND_METHOD(UdpManager::send));
   EXPOSE_FN(*_runtime, datagram_close, 1, BIND_METHOD(UdpManager::close));
@@ -194,6 +193,7 @@ UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInv
   global.setProperty(*_runtime, "dgc_IP_ADD_MEMBERSHIP", static_cast<int>(IP_ADD_MEMBERSHIP));
   global.setProperty(*_runtime, "dgc_IP_DROP_MEMBERSHIP", static_cast<int>(IP_DROP_MEMBERSHIP));
   global.setProperty(*_runtime, "dgc_IP_TTL", static_cast<int>(IP_TTL));
+  global.setProperty(*_runtime, "datagram_callbacks", Object(*_runtime));
 
   createWorker();
 }
@@ -309,16 +309,6 @@ JSI_HOST_FUNCTION(UdpManager::create) {
   return fd;
 }
 
-JSI_HOST_FUNCTION(UdpManager::startWorker) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
-  auto handler = arguments[1].asObject(runtime).asFunction(runtime);
-
-  _eventHandlers[fd] = std::make_shared<facebook::jsi::Function>(std::move(handler));
-  emplaceFd(fd);
-
-  return Value::undefined();
-}
-
 JSI_HOST_FUNCTION(UdpManager::bind) {
   auto fd = static_cast<int>(arguments[0].asNumber());
   auto type = static_cast<int>(arguments[1].asNumber());
@@ -353,6 +343,8 @@ JSI_HOST_FUNCTION(UdpManager::bind) {
   if (ret < 0) {
     throw JSError(runtime, error_name(errno));
   }
+
+  emplaceFd(fd);
 
   return Value::undefined();
 }
@@ -571,8 +563,11 @@ void UdpManager::receiveEvent() {
     auto event = events.front();
     events.pop();
     lock.unlock();
-    if (_eventHandlers.count(event.fd) > 0) {
-      runOnJS([this, event = std::move(event)]() {
+    runOnJS([this, event = std::move(event)]() {
+      try {
+        auto callback = _runtime->global()
+          .getPropertyAsObject(*_runtime, "datagram_callbacks")
+          .getPropertyAsFunction(*_runtime, std::to_string(event.fd).c_str());
         auto eventObj = Object(*_runtime);
         eventObj.setProperty(
           *_runtime,
@@ -616,9 +611,11 @@ void UdpManager::receiveEvent() {
             .getObject(*_runtime);
           eventObj.setProperty(*_runtime, "error", errorObj);
         }
-        _eventHandlers[event.fd]->call(*_runtime, eventObj);
-      });
-    }
+        callback.call(*_runtime, eventObj);
+      } catch (const std::exception &e) {
+        LOGW("Error in receiveEvent: %s", e.what());
+      }
+    });
   }
 }
 

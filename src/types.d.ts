@@ -9,11 +9,6 @@ declare interface datagram_event {
   error?: Error;
 }
 
-declare function datagram_startWorker(
-  fd: number,
-  listener: (event: datagram_event) => void
-): void;
-
 declare function datagram_bind(
   fd: number,
   type: 4 | 6,
@@ -67,3 +62,6 @@ declare var dgc_IP_MULTICAST_LOOP: number;
 declare var dgc_IP_ADD_MEMBERSHIP: number;
 declare var dgc_IP_DROP_MEMBERSHIP: number;
 declare var dgc_IP_TTL: number;
+declare var datagram_callbacks: {
+  [key: string]: (event: datagram_event) => void;
+};
