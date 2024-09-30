@@ -12,10 +12,11 @@
 RCT_EXPORT_MODULE()
 
 std::shared_ptr<jsiudp::UdpManager> _manager;
+std::map<int, std::shared_ptr<facebook::jsi::Function>> _eventHandlers;
 
 - (void)invalidate {
   if (_manager) {
-    _manager->invalidate();
+    _manager->closeAll();
   }
 }
 
@@ -31,7 +32,7 @@ void installApi(
   std::shared_ptr<facebook::react::CallInvoker> callInvoker,
   facebook::jsi::Runtime *runtime
 ) {
-  _manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(callInvoker));
+  _manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(callInvoker), _eventHandlers);
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)

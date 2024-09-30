@@ -51,20 +51,19 @@ namespace jsiudp {
   public:
     UdpManager(
       facebook::jsi::Runtime *jsiRuntime,
-      std::shared_ptr<facebook::react::CallInvoker> callInvoker
+      std::shared_ptr<facebook::react::CallInvoker> callInvoker,
+      std::map<int, std::shared_ptr<facebook::jsi::Function>> &eventHandlers
     );
     ~UdpManager();
 
-    void invalidate();
+    void closeAll();
 
   protected:
     facebook::jsi::Runtime *_runtime;
     std::shared_ptr<facebook::react::CallInvoker> _callInvoker;
-    std::map<int, std::thread> workers;
-    std::map<int, bool> running;
     std::atomic<bool> _invalidate = false;
     std::thread eventThread;
-    std::map<int, std::shared_ptr<facebook::jsi::Function>> eventHandlers;
+    std::map<int, std::shared_ptr<facebook::jsi::Function>> &_eventHandlers;
 
     JSI_HOST_FUNCTION(create);
     JSI_HOST_FUNCTION(send);
@@ -77,13 +76,23 @@ namespace jsiudp {
 
     void runOnJS(std::function<void()> &&f);
 
-    void workerLoop(int fd);
     void sendEvent(Event event);
     void receiveEvent();
+
+    // receive worker
+    void emplaceFd(int fd);
+    void removeFd(int fd);
+    void createWorker();
 
   private:
     std::condition_variable cond;
     std::mutex mutex;
     std::queue<Event> events;
+    std::vector<int> fds;
+    // worker pool
+    std::vector<std::thread> workerPool;
+    std::queue<int> fdQueue;
+    std::mutex fdQueueMutex;
+    std::condition_variable fdQueueCond;
   };
 }

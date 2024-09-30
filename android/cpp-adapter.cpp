@@ -5,6 +5,7 @@
 #include "react-native-jsi-udp.h"
 
 std::shared_ptr<jsiudp::UdpManager> manager;
+std::map<int, std::shared_ptr<facebook::jsi::Function>> eventHandlers;
 
 extern "C"
 JNIEXPORT void JNICALL
@@ -16,11 +17,12 @@ Java_com_jsiudp_JsiUdpModule_nativeInstall(JNIEnv *env, jclass _, jlong jsiPtr, 
     }->cthis()->getCallInvoker()
   };
 
-  manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(jsCallInvoker));
+  manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(jsCallInvoker), eventHandlers);
 }
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_jsiudp_JsiUdpModule_nativeReset(JNIEnv *env, jclass _) {
   manager.reset();
+  eventHandlers.clear();
 }

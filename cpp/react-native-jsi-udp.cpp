@@ -79,10 +79,16 @@ std::string error_name(int err) {
       return "ENOBUFS";
     case EOPNOTSUPP:
       return "EOPNOTSUPP";
-    #if __APPLE__
-    case 65:
-      return "No route to host";
-    #endif
+    case ENETDOWN:
+      return "ENETDOWN";
+    case ECONNABORTED:
+      return "ECONNABORTED";
+    case ECONNRESET:
+      return "ECONNRESET";
+    case ENOTCONN:
+      return "ENOTCONN";
+    case EHOSTUNREACH:
+      return "EHOSTUNREACH";
     case EPERM:
       return "EPERM";
     case EPIPE:
@@ -162,7 +168,7 @@ int setupIface(int fd, struct sockaddr_in6 &addr) {
   return 0;
 }
 
-UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInvoker): _runtime(jsiRuntime), _callInvoker(callInvoker) {
+UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInvoker, std::map<int, std::shared_ptr<facebook::jsi::Function>> &eventHandlers): _runtime(jsiRuntime), _callInvoker(callInvoker), _eventHandlers(eventHandlers) {
   eventThread = std::thread(&UdpManager::receiveEvent, this);
 
   EXPOSE_FN(*_runtime, datagram_create, 1, BIND_METHOD(UdpManager::create));
@@ -188,22 +194,89 @@ UdpManager::UdpManager(Runtime *jsiRuntime, std::shared_ptr<CallInvoker> callInv
   global.setProperty(*_runtime, "dgc_IP_ADD_MEMBERSHIP", static_cast<int>(IP_ADD_MEMBERSHIP));
   global.setProperty(*_runtime, "dgc_IP_DROP_MEMBERSHIP", static_cast<int>(IP_DROP_MEMBERSHIP));
   global.setProperty(*_runtime, "dgc_IP_TTL", static_cast<int>(IP_TTL));
+
+  createWorker();
 }
 
 UdpManager::~UdpManager() {
-  invalidate();
-}
-
-void UdpManager::invalidate() {
   _invalidate = true;
+  fdQueueCond.notify_all();
   cond.notify_all();
   if (eventThread.joinable()) eventThread.join();
-  for (auto &entry : workers) {
-    if (entry.second.joinable()) entry.second.join();
+  for (auto &worker : workerPool) {
+    if (worker.joinable()) worker.join();
   }
-  running.clear();
-  workers.clear();
-  eventHandlers.clear();
+  for (auto &fd : fds) {
+    ::close(fd);
+  }
+}
+
+void UdpManager::createWorker() {
+  auto num_workers = std::thread::hardware_concurrency() >> 1;
+  if (num_workers == 0) {
+    num_workers = 1;
+  }
+  for (int i = 0; i < num_workers; i++) {
+    workerPool.emplace_back([this] {
+      char buffer[MAX_PACK_SIZE];
+      while (!_invalidate) {
+        std::unique_lock<std::mutex> lock(fdQueueMutex);
+        fdQueueCond.wait(lock, [this] { return !fdQueue.empty() || _invalidate; });
+        if (_invalidate) {
+          break;
+        }
+        auto fd = fdQueue.front();
+        fdQueue.pop();
+        lock.unlock();
+        struct sockaddr_in in_addr;
+        socklen_t in_len = sizeof(in_addr);
+        auto recvn = recvfrom(fd, buffer, sizeof(buffer), 0, (struct sockaddr*)&in_addr, &in_len);
+        if (recvn < 0) {
+          if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            sendEvent({ fd, ERROR, error_name(errno), 0, "", 0 });
+            continue;
+          }
+        } else {
+          sendEvent({
+            fd,
+            MESSAGE,
+            std::string(buffer, recvn),
+            in_addr.sin_family,
+            inet_ntoa(in_addr.sin_addr),
+            ntohs(in_addr.sin_port)
+          });
+        }
+        emplaceFd(fd);
+      }
+    });
+  }
+}
+
+void UdpManager::emplaceFd(int fd) {
+  if (_invalidate) return;
+  std::lock_guard<std::mutex> lock(fdQueueMutex);
+  fdQueue.emplace(fd);
+  fdQueueCond.notify_one();
+}
+
+void UdpManager::removeFd(int fd) {
+  std::lock_guard<std::mutex> lock(fdQueueMutex);
+  while (!fdQueue.empty()) {
+    auto f = fdQueue.front();
+    fdQueue.pop();
+    if (f != fd) {
+      fdQueue.emplace(f);
+    }
+  }
+  fdQueueCond.notify_all();
+}
+
+void UdpManager::closeAll() {
+  for (auto &fd : fds) {
+    removeFd(fd);
+    ::close(fd);
+  }
+  fds.clear();
 }
 
 void UdpManager::runOnJS(std::function<void()> &&f) {
@@ -231,24 +304,17 @@ JSI_HOST_FUNCTION(UdpManager::create) {
   tv.tv_usec = 10;
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+  fds.emplace_back(fd);
+
   return fd;
 }
 
 JSI_HOST_FUNCTION(UdpManager::startWorker) {
   auto fd = static_cast<int>(arguments[0].asNumber());
-  auto handler = std::make_shared<Function>(arguments[1].asObject(runtime).asFunction(runtime));
-  if (running.count(fd) > 0 && running[fd]) {
-    throw JSError(runtime, "E_ALREADY_RUNNING");
-  }
-  if (workers.count(fd) > 0) {
-    LOGW("worker already exists, fd = %d, joinable = %d", fd, workers[fd].joinable());
-    if (workers[fd].joinable())
-      workers[fd].join();
-  }
+  auto handler = arguments[1].asObject(runtime).asFunction(runtime);
 
-  eventHandlers[fd] = std::move(handler);
-  running[fd] = true;
-  workers[fd] = std::thread(&UdpManager::workerLoop, this, fd);
+  _eventHandlers[fd] = std::make_shared<facebook::jsi::Function>(std::move(handler));
+  emplaceFd(fd);
 
   return Value::undefined();
 }
@@ -293,11 +359,9 @@ JSI_HOST_FUNCTION(UdpManager::bind) {
 
 JSI_HOST_FUNCTION(UdpManager::close) {
   auto fd = static_cast<int>(arguments[0].asNumber());
-  if (running.count(fd) > 0 && running[fd]) {
-    running[fd] = false;
-    workers[fd].join();
-  }
+  removeFd(fd);
   ::close(fd);
+  fds.erase(std::remove(fds.begin(), fds.end(), fd), fds.end());
   return Value::undefined();
 }
 
@@ -507,9 +571,8 @@ void UdpManager::receiveEvent() {
     auto event = events.front();
     events.pop();
     lock.unlock();
-    if (eventHandlers.count(event.fd) > 0) {
-      runOnJS([this, &event]() {
-        auto handler = eventHandlers[event.fd];
+    if (_eventHandlers.count(event.fd) > 0) {
+      runOnJS([this, event = std::move(event)]() {
         auto eventObj = Object(*_runtime);
         eventObj.setProperty(
           *_runtime,
@@ -553,7 +616,7 @@ void UdpManager::receiveEvent() {
             .getObject(*_runtime);
           eventObj.setProperty(*_runtime, "error", errorObj);
         }
-        handler->call(*_runtime, eventObj);
+        _eventHandlers[event.fd]->call(*_runtime, eventObj);
       });
     }
   }
@@ -564,39 +627,6 @@ void UdpManager::sendEvent(Event event) {
   std::lock_guard<std::mutex> lock(mutex);
   events.push(event);
   cond.notify_one();
-}
-
-void UdpManager::workerLoop(int fd) {
-  auto buffer = new char[MAX_PACK_SIZE];
-
-  while (!_invalidate && running.count(fd) > 0 && running.at(fd)) {
-    struct sockaddr_in in_addr;
-    socklen_t in_len = sizeof(in_addr);
-
-    auto recvn = ::recvfrom(fd, buffer, MAX_PACK_SIZE, 0, (struct sockaddr *)&in_addr, &in_len);
-
-    if (recvn < 0) {
-      if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        sendEvent({ fd, ERROR, error_name(errno), 0, "", 0 });
-        break;
-      } else {
-        continue;
-      }
-    }
-
-    sendEvent({
-      fd,
-      MESSAGE,
-      std::string(buffer, recvn),
-      in_addr.sin_family,
-      inet_ntoa(in_addr.sin_addr),
-      ntohs(in_addr.sin_port)
-    });
-  }
-
-  ::close(fd);
-  sendEvent({ fd, CLOSE, "", 0, "", 0 });
-  delete[] buffer;
 }
 
 } // namespace jsiudp
