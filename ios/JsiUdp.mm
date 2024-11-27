@@ -27,18 +27,17 @@ std::shared_ptr<jsiudp::UdpManager> _manager;
   return YES;
 }
 
-void installApi(
-  std::shared_ptr<facebook::react::CallInvoker> callInvoker,
-  facebook::jsi::Runtime *runtime
-) {
-  _manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(callInvoker));
+void installApi(std::shared_ptr<facebook::react::CallInvoker> callInvoker,
+                facebook::jsi::Runtime *runtime) {
+  _manager =
+      std::make_shared<jsiudp::UdpManager>(runtime, std::move(callInvoker));
 }
 
-RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
-{
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install) {
   RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
   if (cxxBridge.runtime != nullptr) {
-    installApi(cxxBridge.jsCallInvoker, (facebook::jsi::Runtime *)cxxBridge.runtime);
+    installApi(cxxBridge.jsCallInvoker,
+               (facebook::jsi::Runtime *)cxxBridge.runtime);
     return @(true);
   }
   return @(false);
@@ -47,10 +46,10 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
 // Don't compile this code when we build for the old architecture.
 #ifdef RCT_NEW_ARCH_ENABLED
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
-    (const facebook::react::ObjCTurboModule::InitParams &)params
-{
+    (const facebook::react::ObjCTurboModule::InitParams &)params {
   RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
-  installApi(cxxBridge.jsCallInvoker, (facebook::jsi::Runtime *)cxxBridge.runtime);
+  installApi(cxxBridge.jsCallInvoker,
+             (facebook::jsi::Runtime *)cxxBridge.runtime);
 
   return std::make_shared<facebook::react::NativeJsiUdpSpecJSI>(params);
 }
@@ -62,24 +61,28 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
 
 - (instancetype)init {
   if (self = [super init]) {
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                           selector:@selector(handleAppStateChange:)
-                                               name:UIApplicationWillResignActiveNotification
-                                             object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                           selector:@selector(handleAppStateChange:)
-                                               name:UIApplicationDidBecomeActiveNotification
-                                             object:nil];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(handleAppStateChange:)
+               name:UIApplicationWillResignActiveNotification
+             object:nil];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(handleAppStateChange:)
+               name:UIApplicationDidBecomeActiveNotification
+             object:nil];
   }
   return self;
 }
 
 - (void)handleAppStateChange:(NSNotification *)notification {
-  if ([notification.name isEqualToString:UIApplicationWillResignActiveNotification]) {
+  if ([notification.name
+          isEqualToString:UIApplicationWillResignActiveNotification]) {
     if (_manager) {
       _manager->suspendAll();
     }
-  } else if ([notification.name isEqualToString:UIApplicationDidBecomeActiveNotification]) {
+  } else if ([notification.name
+                 isEqualToString:UIApplicationDidBecomeActiveNotification]) {
     if (_manager) {
       _manager->resumeAll();
     }
