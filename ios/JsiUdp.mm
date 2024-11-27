@@ -56,4 +56,34 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install)
 }
 #endif
 
+- (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (instancetype)init {
+  if (self = [super init]) {
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(handleAppStateChange:)
+                                               name:UIApplicationWillResignActiveNotification
+                                             object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(handleAppStateChange:)
+                                               name:UIApplicationDidBecomeActiveNotification
+                                             object:nil];
+  }
+  return self;
+}
+
+- (void)handleAppStateChange:(NSNotification *)notification {
+  if ([notification.name isEqualToString:UIApplicationWillResignActiveNotification]) {
+    if (_manager) {
+      _manager->suspendAll();
+    }
+  } else if ([notification.name isEqualToString:UIApplicationDidBecomeActiveNotification]) {
+    if (_manager) {
+      _manager->resumeAll();
+    }
+  }
+}
+
 @end

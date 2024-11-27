@@ -206,7 +206,7 @@ UdpManager::~UdpManager() {
   for (auto &worker : workerPool) {
     if (worker.joinable()) worker.join();
   }
-  for (auto &fd : fds) {
+  for (const auto& [id, fd] : idToFdMap) {
     ::close(fd);
   }
 }
@@ -272,11 +272,11 @@ void UdpManager::removeFd(int fd) {
 }
 
 void UdpManager::closeAll() {
-  for (auto &fd : fds) {
+  for (const auto& [id, fd] : idToFdMap) {
     removeFd(fd);
     ::close(fd);
   }
-  fds.clear();
+  idToFdMap.clear();
 }
 
 void UdpManager::runOnJS(std::function<void()> &&f) {
@@ -304,13 +304,15 @@ JSI_HOST_FUNCTION(UdpManager::create) {
   tv.tv_usec = 10;
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-  fds.emplace_back(fd);
+  int id = nextId++;
+  idToFdMap[id] = fd;
 
-  return fd;
+  return id;
 }
 
 JSI_HOST_FUNCTION(UdpManager::bind) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto id = static_cast<int>(arguments[0].asNumber());
+  auto fd = idToFdMap[id];
   auto type = static_cast<int>(arguments[1].asNumber());
   auto host = arguments[2].asString(runtime).utf8(runtime);
   auto port = static_cast<int>(arguments[3].asNumber());
@@ -350,17 +352,19 @@ JSI_HOST_FUNCTION(UdpManager::bind) {
 }
 
 JSI_HOST_FUNCTION(UdpManager::close) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto id = static_cast<int>(arguments[0].asNumber());
+  auto fd = idToFdMap[id];
   removeFd(fd);
   ::close(fd);
-  fds.erase(std::remove(fds.begin(), fds.end(), fd), fds.end());
+  idToFdMap.erase(id);
   return Value::undefined();
 }
 
 JSI_HOST_FUNCTION(UdpManager::setOpt) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto id = static_cast<int>(arguments[0].asNumber());
   auto level = static_cast<int>(arguments[1].asNumber());
   auto option = static_cast<int>(arguments[2].asNumber());
+  auto fd = idToFdMap[id];
 
   long result = 0;
   if (level == SOL_SOCKET) {
@@ -431,7 +435,8 @@ JSI_HOST_FUNCTION(UdpManager::setOpt) {
 }
 
 JSI_HOST_FUNCTION(UdpManager::getOpt) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto id = static_cast<int>(arguments[0].asNumber());
+  auto fd = idToFdMap[id];
   auto level = static_cast<int>(arguments[1].asNumber());
   auto option = static_cast<int>(arguments[2].asNumber());
 
@@ -449,7 +454,8 @@ JSI_HOST_FUNCTION(UdpManager::getOpt) {
 }
 
 JSI_HOST_FUNCTION(UdpManager::send) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto id = static_cast<int>(arguments[0].asNumber());
+  auto fd = idToFdMap[id];
   auto type = static_cast<int>(arguments[1].asNumber());
   auto host = arguments[2].asString(runtime).utf8(runtime);
   auto port = static_cast<int>(arguments[3].asNumber());
@@ -496,7 +502,8 @@ JSI_HOST_FUNCTION(UdpManager::send) {
 }
 
 JSI_HOST_FUNCTION(UdpManager::getSockName) {
-  auto fd = static_cast<int>(arguments[0].asNumber());
+  auto id = static_cast<int>(arguments[0].asNumber());
+  auto fd = idToFdMap[id];
   int type = static_cast<int>(arguments[1].asNumber());
 
   auto result = Object(runtime);
@@ -563,11 +570,14 @@ void UdpManager::receiveEvent() {
     auto event = events.front();
     events.pop();
     lock.unlock();
-    runOnJS([this, event = std::move(event)]() {
+    int id = std::find_if(idToFdMap.begin(), idToFdMap.end(), [&event](const auto& pair) {
+      return pair.second == event.fd;
+    })->first;
+    runOnJS([this, id, event = std::move(event)]() {
       try {
         auto callback = _runtime->global()
           .getPropertyAsObject(*_runtime, "datagram_callbacks")
-          .getPropertyAsFunction(*_runtime, std::to_string(event.fd).c_str());
+          .getPropertyAsFunction(*_runtime, std::to_string(id).c_str());
         auto eventObj = Object(*_runtime);
         eventObj.setProperty(
           *_runtime,
@@ -624,6 +634,105 @@ void UdpManager::sendEvent(Event event) {
   std::lock_guard<std::mutex> lock(mutex);
   events.push(event);
   cond.notify_one();
+}
+
+void UdpManager::suspendAll() {
+  std::lock_guard<std::mutex> lock(mutex);
+
+  while (!fdQueue.empty()) {
+    fdQueue.pop();
+  }
+
+  for (const auto& [id, fd] : idToFdMap) {
+    SocketState state;
+    state.id = id;
+
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr *)&addr, &len) == 0) {
+      state.address = inet_ntoa(addr.sin_addr);
+      state.port = ntohs(addr.sin_port);
+      state.type = addr.sin_family == AF_INET ? 4 : 6;
+      
+      int value;
+      socklen_t optlen = sizeof(value);
+      if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, &optlen) == 0) {
+        state.reuseAddr = value;
+      }
+      if (getsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &value, &optlen) == 0) {
+        state.reusePort = value;
+      }
+      if (getsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, &optlen) == 0) {
+        state.broadcast = value;
+      }
+    }
+
+    suspendedSockets.push_back(state);
+    removeFd(fd);
+    ::close(fd);
+  }
+  
+  idToFdMap.clear();
+  cond.notify_all();
+}
+
+void UdpManager::resumeAll() {
+  std::lock_guard<std::mutex> lock(mutex);
+
+  for (const auto& state : suspendedSockets) {
+    auto newFd = socket(state.type == 4 ? AF_INET : AF_INET6, SOCK_DGRAM, 0);
+    if (newFd <= 0) {
+      sendEvent({
+        .fd = state.id,
+        .type = ERROR,
+        .data = error_name(errno),
+      });
+      continue;
+    }
+
+    if (state.reuseAddr) {
+      int value = 1;
+      setsockopt(newFd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
+    }
+    if (state.reusePort) {
+      int value = 1;
+      setsockopt(newFd, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
+    }
+    if (state.broadcast) {
+      int value = 1;
+      setsockopt(newFd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
+    }
+
+    if (state.type == 4) {
+      struct sockaddr_in addr;
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(state.port);
+      inet_pton(AF_INET, state.address.c_str(), &(addr.sin_addr));
+      
+      if (setupIface(newFd, addr) == 0 && 
+          ::bind(newFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
+        idToFdMap[state.id] = newFd;
+        emplaceFd(newFd);
+      } else {
+        ::close(newFd);
+      }
+    } else {
+      struct sockaddr_in6 addr;
+      addr.sin6_family = AF_INET6;
+      addr.sin6_port = htons(state.port);
+      inet_pton(AF_INET6, state.address.c_str(), &(addr.sin6_addr));
+
+      if (setupIface(newFd, addr) == 0 && 
+          ::bind(newFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
+        idToFdMap[state.id] = newFd;
+        emplaceFd(newFd);
+      } else {
+        ::close(newFd);
+      }
+    }
+  }
+
+  suspendedSockets.clear();
 }
 
 } // namespace jsiudp

@@ -47,12 +47,24 @@ namespace jsiudp {
     int port;
   };
 
+  struct SocketState {
+    int id;
+    std::string address;
+    int port;
+    int type;
+    bool reuseAddr;
+    bool reusePort;
+    bool broadcast;
+  };
+
   class UdpManager {
   public:
     UdpManager(facebook::jsi::Runtime *jsiRuntime, std::shared_ptr<facebook::react::CallInvoker> callInvoker);
     ~UdpManager();
 
     void closeAll();
+    void suspendAll();
+    void resumeAll();
 
   protected:
     facebook::jsi::Runtime *_runtime;
@@ -82,11 +94,13 @@ namespace jsiudp {
     std::condition_variable cond;
     std::mutex mutex;
     std::queue<Event> events;
-    std::vector<int> fds;
-    // worker pool
     std::vector<std::thread> workerPool;
     std::queue<int> fdQueue;
     std::mutex fdQueueMutex;
     std::condition_variable fdQueueCond;
+    std::map<int, int> idToFdMap;
+    int nextId = 1;
+
+    std::vector<SocketState> suspendedSockets;
   };
 }

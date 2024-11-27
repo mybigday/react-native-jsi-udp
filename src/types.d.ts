@@ -10,16 +10,16 @@ declare interface datagram_event {
 }
 
 declare function datagram_bind(
-  fd: number,
+  id: number,
   type: 4 | 6,
   host: string,
   port: number
 ): void;
 
-declare function datagram_close(fd: number): void;
+declare function datagram_close(id: number): void;
 
 declare function datagram_setOpt(
-  fd: number,
+  id: number,
   level: number,
   opt: number,
   value1: number | string,
@@ -27,13 +27,13 @@ declare function datagram_setOpt(
 ): void;
 
 declare function datagram_getOpt(
-  fd: number,
+  id: number,
   level: number,
   opt: number
 ): number;
 
 declare function datagram_send(
-  fd: number,
+  id: number,
   type: 4 | 6,
   host: string,
   port: number,
@@ -41,7 +41,7 @@ declare function datagram_send(
 ): void;
 
 declare function datagram_getSockName(
-  fd: number,
+  id: number,
   type: 4 | 6
 ): {
   family: 'IPv4' | 'IPv6';
