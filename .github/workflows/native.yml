@@ -18,9 +18,9 @@ jobs:
     runs-on: macOS-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3.6.0
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version-file: .nvmrc
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
       - name: Get yarn cache directory path
@@ -50,9 +50,9 @@ jobs:
     runs-on: macOS-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3.6.0
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version-file: .nvmrc
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
       - name: Get yarn cache directory path
