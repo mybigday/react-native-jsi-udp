@@ -10265,15 +10265,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pod-install@npm:^0.3.9":
-  version: 0.3.9
-  resolution: "pod-install@npm:0.3.9"
-  bin:
-    pod-install: build/index.js
-  checksum: 316e1c3f1c35ce5506d96ffa9a4e1495ad4811bdeaa909594bc4345cf33afa8bf2f28649af8f9645cba1462c55125ace3805e316ed2a737297d83b05b9c7e396
-  languageName: node
-  linkType: hard
-
 "prelude-ls@npm:^1.2.1":
   version: 1.2.1
   resolution: "prelude-ls@npm:1.2.1"
@@ -10559,7 +10550,6 @@ __metadata:
     eslint-config-prettier: ^8.5.0
     eslint-plugin-prettier: ^4.0.0
     jest: ^29.6.3
-    pod-install: ^0.3.9
     prettier: ^2.0.5
     react: 19.0.0
     react-native: 0.79.2
