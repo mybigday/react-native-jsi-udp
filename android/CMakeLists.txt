@@ -91,24 +91,47 @@ endif()
 
 find_library(LOG_LIB log)
 
-target_include_directories(
-  jsiudp
-  PRIVATE
-  "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
-  "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
-  "${NODE_MODULES_DIR}/react-native/ReactCommon"
-  "${NODE_MODULES_DIR}/react-native/ReactCommon/react/nativemodule/core"
-  "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni"
-  ../cpp
-  ${libfbjni_include_DIRS}
-)
+if (${ReactAndroid_VERSION_MINOR} GREATER_EQUAL 76)
+  target_include_directories(
+    jsiudp
+    PRIVATE
+    "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
+    "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
+    "${NODE_MODULES_DIR}/react-native/ReactCommon"
+    ../cpp
+    ${libfbjni_include_DIRS}
+  )
 
-target_link_libraries(
-  jsiudp
-  ${LOG_LIB}
-  ${FBJNI_LIBRARY}
-  ${REACT_LIB}
-  ${JSI_LIB}
-  ${TURBOMODULES_LIB}
-  android
-)
+  target_link_libraries(
+    jsiudp
+    ${LOG_LIB}
+    ReactAndroid::reactnative
+    ReactAndroid::jsi
+    fbjni::fbjni
+  )
+
+  # Exclude libreactnative.so to avoid conflicts
+  set(CMAKE_EXCLUDE_FILES "libreactnative.so")
+else()
+  target_include_directories(
+    jsiudp
+    PRIVATE
+    "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
+    "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
+    "${NODE_MODULES_DIR}/react-native/ReactCommon"
+    "${NODE_MODULES_DIR}/react-native/ReactCommon/react/nativemodule/core"
+    "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni"
+    ../cpp
+    ${libfbjni_include_DIRS}
+  )
+
+  target_link_libraries(
+    jsiudp
+    ${LOG_LIB}
+    ${FBJNI_LIBRARY}
+    ${REACT_LIB}
+    ${JSI_LIB}
+    ${TURBOMODULES_LIB}
+    android
+  )
+endif()
