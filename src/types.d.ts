@@ -49,6 +49,10 @@ declare function datagram_getSockName(
   port: number;
 };
 
+declare function datagram_receive(
+  id: number
+): Promise<datagram_event | undefined>;
+
 declare var dgc_SOL_SOCKET: number;
 declare var dgc_IPPROTO_IP: number;
 declare var dgc_IPPROTO_IPV6: number;
