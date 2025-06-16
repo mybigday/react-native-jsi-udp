@@ -39,6 +39,8 @@ export class Socket extends EventEmitter {
   private _id: number;
   private reuseAddr: boolean;
   private reusePort: boolean;
+  private _receiving: boolean = false;
+  private _timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: Options, callback?: Callback) {
     super();
@@ -50,34 +52,46 @@ export class Socket extends EventEmitter {
     this.reuseAddr = options.reuseAddr ?? false;
     this.reusePort = options.reusePort ?? false;
     this._id = datagram_create(this.type);
-    datagram_callbacks[String(this._id)] = ({
-      type,
-      family,
-      address: remoteAddr,
-      port: remotePort,
-      data,
-      error,
-    }) => {
-      switch (type) {
-        case 'error':
-          this.emit('error', error);
-          break;
-        case 'close':
-          this.state = State.CLOSED;
-          this.emit('close');
-          delete datagram_callbacks[String(this._id)];
-          break;
-        case 'message':
-          this.emit('message', Buffer.from(data!), {
-            address: remoteAddr,
-            port: remotePort,
-            family,
-          });
-          break;
-      }
-    };
     if (callback) this.on('message', callback);
   }
+
+  private startReceiving() {
+    if (this._receiving || this.state !== State.BOUND) return;
+
+    this._receiving = true;
+    this._receive();
+  }
+
+  private stopReceiving() {
+    this._receiving = false;
+    if (this._timeoutId) {
+      clearTimeout(this._timeoutId);
+      this._timeoutId = null;
+    }
+  }
+
+  private _receive = async () => {
+    if (!this._receiving) return;
+
+    try {
+      const result = await datagram_receive(this._id);
+
+      if (result?.type === 'message') {
+        this.emit('message', Buffer.from(result.data!), {
+          address: result.address,
+          port: result.port,
+          family: result.family,
+        });
+      } else if (result?.type === 'error') {
+        this.emit('error', result.error);
+      }
+    } catch (e) {
+      this.emit('error', e);
+    }
+
+    // Schedule the next receive operation
+    this._timeoutId = setTimeout(this._receive, 0);
+  };
 
   bind(port?: number, address?: string | Callback, callback?: Callback) {
     if (this.state !== State.UNBOUND) {
@@ -87,7 +101,7 @@ export class Socket extends EventEmitter {
       callback = address;
       address = undefined;
     }
-    if (callback) this.once('listening', callback!);
+    if (callback) this.once('listening', callback);
     const defaultAddr = this.type === 4 ? '0.0.0.0' : '::1';
     try {
       datagram_setOpt(
@@ -105,8 +119,9 @@ export class Socket extends EventEmitter {
       datagram_bind(this._id, this.type, address ?? defaultAddr, port ?? 0);
       this.state = State.BOUND;
       this.emit('listening');
+      this.startReceiving();
     } catch (e) {
-      if (callback) callback(e);
+      if (callback) callback(e as Error);
       else this.emit('error', e);
     }
   }
@@ -117,7 +132,7 @@ export class Socket extends EventEmitter {
     length: number | undefined,
     port: number,
     address: string,
-    callback?: Callback
+    callback?: (e?: Error) => void
   ) {
     let buf: Buffer;
     if (typeof data === 'string') {
@@ -127,10 +142,16 @@ export class Socket extends EventEmitter {
     }
     buf = buf.slice(offset ?? 0, length ?? buf.length);
     try {
-      datagram_send(this._id, this.type, address, port, buf.buffer);
+      datagram_send(
+        this._id,
+        this.type,
+        address,
+        port,
+        buf.buffer as ArrayBuffer
+      );
       callback?.();
     } catch (e) {
-      if (callback) callback(e);
+      if (callback) callback(e as Error);
       else this.emit('error', e);
     }
   }
@@ -140,7 +161,9 @@ export class Socket extends EventEmitter {
       return;
     }
     if (callback) this.once('close', callback!);
+    this.stopReceiving();
     datagram_close(this._id);
+    this.state = State.CLOSED;
     this.emit('close');
   }
 

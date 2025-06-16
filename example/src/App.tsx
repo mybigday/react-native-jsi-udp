@@ -20,8 +20,11 @@ export default function App() {
       console.log('got error', err);
     });
     socket.current!.on('message', (msg, rinfo) => {
-      console.log('got message', msg.toString());
-      if (msg.toString() === 'hello') return;
+      if (msg.length !== 8) {
+        // not log time message
+        console.log('got message', msg.toString());
+      }
+      if (msg.toString() === 'hello') return; // not send back "hello"
       socket.current?.send(msg, 0, msg.length, rinfo.port, rinfo.address);
     });
     socket.current!.on('close', () => {
@@ -73,5 +76,6 @@ const styles = StyleSheet.create({
   },
   text: {
     fontSize: 20,
+    color: '#000',
   },
 });

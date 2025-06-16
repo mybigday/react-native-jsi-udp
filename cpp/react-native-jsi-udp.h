@@ -1,17 +1,16 @@
 #pragma once
 #include "helper.h"
-#include <ReactCommon/CallInvoker.h>
 #include <atomic>
-#include <condition_variable>
-#include <functional>
 #include <jsi/jsi.h>
 #include <map>
 #include <memory>
-#include <mutex>
-#include <queue>
 #include <string>
-#include <thread>
 #include <tuple>
+
+#define MAX_PACK_SIZE 65535
+
+// 10us, very short to avoid blocking
+#define RECEIVE_TIMEUS 10
 
 #if __APPLE__
 
@@ -67,8 +66,7 @@ struct SocketState {
 
 class UdpManager {
 public:
-  UdpManager(facebook::jsi::Runtime *jsiRuntime,
-             std::shared_ptr<facebook::react::CallInvoker> callInvoker);
+  UdpManager(facebook::jsi::Runtime *jsiRuntime);
   ~UdpManager();
 
   void closeAll();
@@ -77,9 +75,7 @@ public:
 
 protected:
   facebook::jsi::Runtime *_runtime;
-  std::shared_ptr<facebook::react::CallInvoker> _callInvoker;
   std::atomic<bool> _invalidate = false;
-  std::thread eventThread;
 
   JSI_HOST_FUNCTION(create);
   JSI_HOST_FUNCTION(send);
@@ -88,27 +84,13 @@ protected:
   JSI_HOST_FUNCTION(getOpt);
   JSI_HOST_FUNCTION(close);
   JSI_HOST_FUNCTION(getSockName);
-
-  void runOnJS(std::function<void()> &&f);
-
-  void sendEvent(Event event);
-  void receiveEvent();
-
-  // receive worker
-  void emplaceFd(int fd);
-  void removeFd(int fd);
-  void createWorker();
+  JSI_HOST_FUNCTION(receive);
 
 private:
-  std::condition_variable cond;
-  std::mutex mutex;
-  std::queue<Event> events;
-  std::vector<std::thread> workerPool;
-  std::queue<int> fdQueue;
-  std::mutex fdQueueMutex;
-  std::condition_variable fdQueueCond;
   std::map<int, int> idToFdMap;
   int nextId = 1;
+
+  char receiveBuffer[MAX_PACK_SIZE];
 
   std::vector<SocketState> suspendedSockets;
 };

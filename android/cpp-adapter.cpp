@@ -16,7 +16,7 @@ Java_com_jsiudp_JsiUdpModule_nativeInstall(JNIEnv *env, jclass _, jlong jsiPtr, 
     }->cthis()->getCallInvoker()
   };
 
-  manager = std::make_shared<jsiudp::UdpManager>(runtime, std::move(jsCallInvoker));
+  manager = std::make_shared<jsiudp::UdpManager>(runtime);
 }
 
 extern "C"
