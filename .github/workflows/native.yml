@@ -1,6 +1,8 @@
 name: Native CI
 on:
   push:
+    branches:
+      - main
     paths:
       - 'ios/**'
       - 'android/**'
