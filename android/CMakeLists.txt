@@ -55,18 +55,6 @@ endif()
 
 if(${REACT_NATIVE_VERSION} GREATER_EQUAL 71)
   # RN 0.71 distributes prebuilt binaries.
-  set(REACT_LIB ReactAndroid::react_nativemodule_core)
-else()
-  find_library(
-    REACT_LIB
-    react_nativemodule_core
-    PATHS ${LIBRN_DIR}
-    NO_CMAKE_FIND_ROOT_PATH
-  )
-endif()
-
-if(${REACT_NATIVE_VERSION} GREATER_EQUAL 71)
-  # RN 0.71 distributes prebuilt binaries.
   set (FBJNI_LIBRARY fbjni::fbjni)
 else()
   find_library(
@@ -77,7 +65,22 @@ else()
   )
 endif()
 
-if(${REACT_NATIVE_VERSION} GREATER_EQUAL 71)
+if(${REACT_NATIVE_VERSION} GREATER_EQUAL 76)
+  set(REACT_LIB ReactAndroid::reactnative)
+elseif(${REACT_NATIVE_VERSION} GREATER_EQUAL 71)
+  # RN 0.71 distributes prebuilt binaries.
+  set(REACT_LIB ReactAndroid::react_nativemodule_core)
+else()
+  find_library(
+    REACT_LIB
+    react_nativemodule_core
+    PATHS ${LIBRN_DIR}
+    NO_CMAKE_FIND_ROOT_PATH
+  )
+endif()
+
+if(${REACT_NATIVE_VERSION} GREATER_EQUAL 76)
+elseif(${REACT_NATIVE_VERSION} GREATER_EQUAL 71)
   # RN 0.71 distributes prebuilt binaries.
   set (TURBOMODULES_LIB "ReactAndroid::turbomodulejsijni")
 else()
@@ -91,47 +94,24 @@ endif()
 
 find_library(LOG_LIB log)
 
-if (${ReactAndroid_VERSION_MINOR} GREATER_EQUAL 76)
-  target_include_directories(
-    jsiudp
-    PRIVATE
-    "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
-    "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
-    "${NODE_MODULES_DIR}/react-native/ReactCommon"
-    ../cpp
-    ${libfbjni_include_DIRS}
-  )
+target_include_directories(
+  jsiudp
+  PRIVATE
+  "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
+  "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
+  "${NODE_MODULES_DIR}/react-native/ReactCommon"
+  "${NODE_MODULES_DIR}/react-native/ReactCommon/react/nativemodule/core"
+  "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni"
+  ../cpp
+  ${libfbjni_include_DIRS}
+)
 
-  target_link_libraries(
-    jsiudp
-    ${LOG_LIB}
-    ReactAndroid::reactnative
-    ReactAndroid::jsi
-    fbjni::fbjni
-  )
-
-  # Exclude libreactnative.so to avoid conflicts
-  set(CMAKE_EXCLUDE_FILES "libreactnative.so")
-else()
-  target_include_directories(
-    jsiudp
-    PRIVATE
-    "${NODE_MODULES_DIR}/react-native/ReactCommon/callinvoker"
-    "${NODE_MODULES_DIR}/react-native/ReactCommon/jsi"
-    "${NODE_MODULES_DIR}/react-native/ReactCommon"
-    "${NODE_MODULES_DIR}/react-native/ReactCommon/react/nativemodule/core"
-    "${NODE_MODULES_DIR}/react-native/ReactAndroid/src/main/java/com/facebook/react/turbomodule/core/jni"
-    ../cpp
-    ${libfbjni_include_DIRS}
-  )
-
-  target_link_libraries(
-    jsiudp
-    ${LOG_LIB}
-    ${FBJNI_LIBRARY}
-    ${REACT_LIB}
-    ${JSI_LIB}
-    ${TURBOMODULES_LIB}
-    android
-  )
-endif()
+target_link_libraries(
+  jsiudp
+  ${LOG_LIB}
+  ${FBJNI_LIBRARY}
+  ${REACT_LIB}
+  ${JSI_LIB}
+  ${TURBOMODULES_LIB}
+  android
+)
