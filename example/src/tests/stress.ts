@@ -1,6 +1,7 @@
 import { Buffer } from 'buffer';
 import {
   assert,
+  delay,
   assertEqual,
   closeSockets,
   createBoundSocket,
@@ -59,11 +60,17 @@ export const stressSuite: TestSuite = {
 
         try {
           const pendingMessages = waitForMessages(receiver, BURST_COUNT, 10000);
-          await Promise.all(
-            payloads.map((payload) =>
-              sendAsync(sender, payload, receiver.address().port, LOOPBACK)
-            )
-          );
+          // Send in batches to avoid kernel receive buffer overflow
+          const BATCH_SIZE = 100;
+          const port = receiver.address().port;
+          for (let i = 0; i < payloads.length; i += BATCH_SIZE) {
+            const batch = payloads.slice(i, i + BATCH_SIZE);
+            await Promise.all(
+              batch.map((payload) => sendAsync(sender, payload, port, LOOPBACK))
+            );
+            // Yield to let receiver drain
+            await delay(0);
+          }
           const received = await pendingMessages;
           const uniquePayloads = new Set(
             received.map(({ message }) => message.toString())

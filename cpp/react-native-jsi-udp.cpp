@@ -495,90 +495,81 @@ JSI_HOST_FUNCTION(UdpManager::receive) {
   auto id = static_cast<int>(arguments[0].asNumber());
   auto fd = getFdOrThrow(runtime, id);
 
-  // Create a Promise
-  auto promiseCtor = runtime.global().getPropertyAsFunction(runtime, "Promise");
-  auto promise = promiseCtor.callAsConstructor(
-      runtime,
-      Function::createFromHostFunction(
-          runtime, PropNameID::forAscii(runtime, "executor"), 2,
-          [fd, this](Runtime &runtime, const Value &thisValue,
-                     const Value *arguments, size_t count) -> Value {
-            struct sockaddr_storage src_addr;
-            socklen_t src_len = sizeof(src_addr);
-            auto resolve = arguments[0].asObject(runtime).asFunction(runtime);
-            auto reject = arguments[1].asObject(runtime).asFunction(runtime);
+  // Batch-read all available packets in a single JSI call.
+  // Returns an Array of result objects, or undefined if no data.
+  // Collect into a vector first, then create the correctly-sized Array.
+  std::vector<Object> packets;
+  const int MAX_BATCH = 128;
 
-            auto recvn =
-                recvfrom(fd, receiveBuffer, sizeof(receiveBuffer), 0,
-                         reinterpret_cast<struct sockaddr *>(&src_addr),
-                         &src_len);
+  while (static_cast<int>(packets.size()) < MAX_BATCH) {
+    struct sockaddr_storage src_addr;
+    socklen_t src_len = sizeof(src_addr);
 
-            if (recvn < 0) {
-              if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                auto errorObj = Object(runtime);
-                errorObj.setProperty(runtime, "type",
-                                     String::createFromAscii(runtime, "error"));
-                errorObj.setProperty(runtime, "error",
-                                     String::createFromAscii(
-                                         runtime, error_name(errno).c_str()));
-                reject.call(runtime, std::move(errorObj));
-              } else {
-                // No data available, resolve with undefined
-                resolve.call(runtime, Value::undefined());
-              }
-            } else {
-              auto eventObj = Object(runtime);
-              eventObj.setProperty(runtime, "type",
-                                   String::createFromAscii(runtime, "message"));
+    auto recvn =
+        recvfrom(fd, receiveBuffer, sizeof(receiveBuffer), 0,
+                 reinterpret_cast<struct sockaddr *>(&src_addr), &src_len);
 
-              auto ArrayBuffer = runtime.global().getPropertyAsFunction(
-                  runtime, "ArrayBuffer");
-              auto arrayBufferObj =
-                  ArrayBuffer
-                      .callAsConstructor(runtime, static_cast<int>(recvn))
-                      .getObject(runtime);
-              auto arrayBuffer = arrayBufferObj.getArrayBuffer(runtime);
-              memcpy(arrayBuffer.data(runtime), receiveBuffer, recvn);
+    if (recvn < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break; // No more data available
+      }
+      auto errorObj = Object(runtime);
+      errorObj.setProperty(runtime, "type",
+                           String::createFromAscii(runtime, "error"));
+      errorObj.setProperty(
+          runtime, "error",
+          String::createFromAscii(runtime, error_name(errno).c_str()));
+      packets.push_back(std::move(errorObj));
+      break;
+    }
 
-              eventObj.setProperty(runtime, "data", std::move(arrayBuffer));
+    auto eventObj = Object(runtime);
+    eventObj.setProperty(runtime, "type",
+                         String::createFromAscii(runtime, "message"));
 
-              if (src_addr.ss_family == AF_INET) {
-                auto *addr4 =
-                    reinterpret_cast<struct sockaddr_in *>(&src_addr);
-                eventObj.setProperty(
-                    runtime, "family",
-                    String::createFromAscii(runtime, "IPv4"));
-                eventObj.setProperty(
-                    runtime, "address",
-                    String::createFromAscii(runtime,
-                                            inet_ntoa(addr4->sin_addr)));
-                eventObj.setProperty(
-                    runtime, "port",
-                    static_cast<int>(ntohs(addr4->sin_port)));
-              } else {
-                auto *addr6 =
-                    reinterpret_cast<struct sockaddr_in6 *>(&src_addr);
-                char host[INET6_ADDRSTRLEN];
-                inet_ntop(AF_INET6, &addr6->sin6_addr, host,
-                          INET6_ADDRSTRLEN);
-                eventObj.setProperty(
-                    runtime, "family",
-                    String::createFromAscii(runtime, "IPv6"));
-                eventObj.setProperty(
-                    runtime, "address",
-                    String::createFromAscii(runtime, host));
-                eventObj.setProperty(
-                    runtime, "port",
-                    static_cast<int>(ntohs(addr6->sin6_port)));
-              }
+    auto ArrayBuffer =
+        runtime.global().getPropertyAsFunction(runtime, "ArrayBuffer");
+    auto arrayBufferObj =
+        ArrayBuffer.callAsConstructor(runtime, static_cast<int>(recvn))
+            .getObject(runtime);
+    auto arrayBuffer = arrayBufferObj.getArrayBuffer(runtime);
+    memcpy(arrayBuffer.data(runtime), receiveBuffer, recvn);
 
-              resolve.call(runtime, std::move(eventObj));
-            }
+    eventObj.setProperty(runtime, "data", std::move(arrayBuffer));
 
-            return Value::undefined();
-          }));
+    if (src_addr.ss_family == AF_INET) {
+      auto *addr4 = reinterpret_cast<struct sockaddr_in *>(&src_addr);
+      eventObj.setProperty(runtime, "family",
+                           String::createFromAscii(runtime, "IPv4"));
+      eventObj.setProperty(
+          runtime, "address",
+          String::createFromAscii(runtime, inet_ntoa(addr4->sin_addr)));
+      eventObj.setProperty(runtime, "port",
+                           static_cast<int>(ntohs(addr4->sin_port)));
+    } else {
+      auto *addr6 = reinterpret_cast<struct sockaddr_in6 *>(&src_addr);
+      char host[INET6_ADDRSTRLEN];
+      inet_ntop(AF_INET6, &addr6->sin6_addr, host, INET6_ADDRSTRLEN);
+      eventObj.setProperty(runtime, "family",
+                           String::createFromAscii(runtime, "IPv6"));
+      eventObj.setProperty(runtime, "address",
+                           String::createFromAscii(runtime, host));
+      eventObj.setProperty(runtime, "port",
+                           static_cast<int>(ntohs(addr6->sin6_port)));
+    }
 
-  return promise;
+    packets.push_back(std::move(eventObj));
+  }
+
+  if (packets.empty()) {
+    return Value::undefined();
+  }
+
+  auto results = Array(runtime, packets.size());
+  for (size_t i = 0; i < packets.size(); i++) {
+    results.setValueAtIndex(runtime, i, Value(runtime, std::move(packets[i])));
+  }
+  return results;
 }
 
 void UdpManager::suspendAll() {

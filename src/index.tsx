@@ -70,25 +70,26 @@ export class Socket extends EventEmitter {
     }
   }
 
-  private _receive = async () => {
+  private _receive = () => {
     if (!this._receiving) return;
 
     try {
-      // Drain all available packets before yielding to the event loop
-      while (this._receiving) {
-        const result = await datagram_receive(this._id);
+      // Batch-read all available packets in a single JSI call
+      const results = datagram_receive(this._id);
 
-        if (result?.type === 'message') {
-          this.emit('message', Buffer.from(result.data!), {
-            address: result.address,
-            port: result.port,
-            family: result.family,
-          });
-          continue; // immediately try to read more
-        } else if (result?.type === 'error') {
-          this.emit('error', result.error);
+      if (results) {
+        for (const result of results) {
+          if (!this._receiving) break;
+          if (result?.type === 'message') {
+            this.emit('message', Buffer.from(result.data!), {
+              address: result.address,
+              port: result.port,
+              family: result.family,
+            });
+          } else if (result?.type === 'error') {
+            this.emit('error', result.error);
+          }
         }
-        break; // no data available, schedule next poll
       }
     } catch (e) {
       this.emit('error', e);
