@@ -10,6 +10,7 @@ export {
 import { addressSuite } from './address';
 import { broadcastSuite } from './broadcast';
 import { errorsSuite } from './errors';
+import { latencyServerSuite } from './latency-server';
 import { lifecycleSuite } from './lifecycle';
 import { multicastSuite } from './multicast';
 import { optionsSuite } from './options';
@@ -27,4 +28,5 @@ export const testSuites = [
   errorsSuite,
   stressSuite,
   suspendResumeSuite,
+  latencyServerSuite,
 ];

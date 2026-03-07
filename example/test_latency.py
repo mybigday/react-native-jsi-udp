@@ -1,8 +1,27 @@
+"""
+UDP echo latency test.
+
+Usage:
+  python test_latency.py <device-ip> [rounds]
+
+Requires the "Latency server" test case running in the example app
+(echo server on port 12345). Tap "Run Suite" on the Latency server
+card in the test runner, then run this script within 60 seconds.
+
+Example:
+  python test_latency.py 192.168.1.100
+  python test_latency.py 192.168.1.100 200
+"""
+
 import socket
 import sys
 import time
 import struct
 import statistics
+
+if len(sys.argv) < 2:
+    print(__doc__.strip())
+    sys.exit(1)
 
 target = sys.argv[1]
 rounds = 100 if len(sys.argv) < 3 else int(sys.argv[2])
