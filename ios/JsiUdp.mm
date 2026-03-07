@@ -28,14 +28,16 @@ std::shared_ptr<jsiudp::UdpManager> _manager;
   return YES;
 }
 
-void installApi(facebook::jsi::Runtime *runtime) {
+// Renamed to avoid duplicate symbol with react-native-worklets-core
+static void installJsiUdpApi(facebook::jsi::Runtime *runtime) {
   _manager = std::make_shared<jsiudp::UdpManager>(runtime);
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install) {
-  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)_bridge;
+  RCTBridge *bridge = _bridge ?: [RCTBridge currentBridge];
+  RCTCxxBridge *cxxBridge = (RCTCxxBridge *)bridge;
   if (cxxBridge.runtime != nullptr) {
-    installApi((facebook::jsi::Runtime *)cxxBridge.runtime);
+    installJsiUdpApi((facebook::jsi::Runtime *)cxxBridge.runtime);
     return @(true);
   }
   return @(false);

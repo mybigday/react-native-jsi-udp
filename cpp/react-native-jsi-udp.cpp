@@ -199,11 +199,27 @@ UdpManager::~UdpManager() {
   }
 }
 
+int UdpManager::getFdOrThrow(Runtime &runtime, int id) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auto it = idToFdMap.find(id);
+  if (it == idToFdMap.end()) {
+    throw JSError(runtime, "EBADF");
+  }
+  return it->second;
+}
+
 void UdpManager::closeAll() {
-  for (const auto &[id, fd] : idToFdMap) {
+  std::map<int, int> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    snapshot = idToFdMap;
+    idToFdMap.clear();
+    suspendedSockets.clear();
+  }
+
+  for (const auto &[id, fd] : snapshot) {
     ::close(fd);
   }
-  idToFdMap.clear();
 }
 
 JSI_HOST_FUNCTION(UdpManager::create) {
@@ -220,20 +236,21 @@ JSI_HOST_FUNCTION(UdpManager::create) {
     throw JSError(runtime, String::createFromAscii(runtime, error_name(errno)));
   }
 
-  struct timeval tv;
-  tv.tv_sec = 0;
-  tv.tv_usec = RECEIVE_TIMEUS;
-  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  // Set non-blocking for poll-based I/O
+  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 
   int id = nextId++;
-  idToFdMap[id] = fd;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    idToFdMap[id] = fd;
+  }
 
   return id;
 }
 
 JSI_HOST_FUNCTION(UdpManager::bind) {
   auto id = static_cast<int>(arguments[0].asNumber());
-  auto fd = idToFdMap[id];
+  auto fd = getFdOrThrow(runtime, id);
   auto type = static_cast<int>(arguments[1].asNumber());
   auto host = arguments[2].asString(runtime).utf8(runtime);
   auto port = static_cast<int>(arguments[3].asNumber());
@@ -274,9 +291,17 @@ JSI_HOST_FUNCTION(UdpManager::bind) {
 
 JSI_HOST_FUNCTION(UdpManager::close) {
   auto id = static_cast<int>(arguments[0].asNumber());
-  auto fd = idToFdMap[id];
+  int fd;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = idToFdMap.find(id);
+    if (it == idToFdMap.end()) {
+      throw JSError(runtime, "EBADF");
+    }
+    fd = it->second;
+    idToFdMap.erase(it);
+  }
   ::close(fd);
-  idToFdMap.erase(id);
   return Value::undefined();
 }
 
@@ -284,12 +309,12 @@ JSI_HOST_FUNCTION(UdpManager::setOpt) {
   auto id = static_cast<int>(arguments[0].asNumber());
   auto level = static_cast<int>(arguments[1].asNumber());
   auto option = static_cast<int>(arguments[2].asNumber());
-  auto fd = idToFdMap[id];
+  auto fd = getFdOrThrow(runtime, id);
 
   long result = 0;
   if (level == SOL_SOCKET) {
     int value = static_cast<int>(arguments[3].asNumber());
-    result = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
+    result = setsockopt(fd, SOL_SOCKET, option, &value, sizeof(value));
   } else if (level == IPPROTO_IP) {
     switch (option) {
     case IP_TTL:
@@ -357,7 +382,7 @@ JSI_HOST_FUNCTION(UdpManager::setOpt) {
 
 JSI_HOST_FUNCTION(UdpManager::getOpt) {
   auto id = static_cast<int>(arguments[0].asNumber());
-  auto fd = idToFdMap[id];
+  auto fd = getFdOrThrow(runtime, id);
   auto level = static_cast<int>(arguments[1].asNumber());
   auto option = static_cast<int>(arguments[2].asNumber());
 
@@ -376,37 +401,39 @@ JSI_HOST_FUNCTION(UdpManager::getOpt) {
 
 JSI_HOST_FUNCTION(UdpManager::send) {
   auto id = static_cast<int>(arguments[0].asNumber());
-  if (idToFdMap.find(id) == idToFdMap.end()) {
-    throw JSError(runtime, "E_INVALID_SOCKET");
-  }
-
-  auto fd = idToFdMap[id];
+  auto fd = getFdOrThrow(runtime, id);
   auto type = static_cast<int>(arguments[1].asNumber());
   auto host = arguments[2].asString(runtime).utf8(runtime);
   auto port = static_cast<int>(arguments[3].asNumber());
   auto data = arguments[4].asObject(runtime).getArrayBuffer(runtime);
 
+  struct sockaddr_in addr4;
+  struct sockaddr_in6 addr6;
+  struct sockaddr *addrPtr;
+  socklen_t addrLen;
+
+  if (type == 4) {
+    addr4.sin_family = AF_INET;
+    addr4.sin_port = htons(port);
+    if (inet_pton(AF_INET, host.c_str(), &(addr4.sin_addr)) != 1) {
+      throw JSError(runtime, "EINVAL");
+    }
+    addrPtr = reinterpret_cast<struct sockaddr *>(&addr4);
+    addrLen = sizeof(addr4);
+  } else {
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons(port);
+    if (inet_pton(AF_INET6, host.c_str(), &(addr6.sin6_addr)) != 1) {
+      throw JSError(runtime, "EINVAL");
+    }
+    addrPtr = reinterpret_cast<struct sockaddr *>(&addr6);
+    addrLen = sizeof(addr6);
+  }
+
   long ret = 0;
   try {
-    if (type == 4) {
-      struct sockaddr_in addr;
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(port);
-      ret = inet_pton(AF_INET, host.c_str(), &(addr.sin_addr));
-      if (ret == 1) {
-        ret = sendto(fd, data.data(runtime), data.size(runtime), MSG_DONTWAIT,
-                     reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
-      }
-    } else {
-      struct sockaddr_in6 addr;
-      addr.sin6_family = AF_INET6;
-      addr.sin6_port = htons(port);
-      ret = inet_pton(AF_INET6, host.c_str(), &(addr.sin6_addr));
-      if (ret == 1) {
-        ret = sendto(fd, data.data(runtime), data.size(runtime), MSG_DONTWAIT,
-                     reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
-      }
-    }
+    ret = sendto(fd, data.data(runtime), data.size(runtime), MSG_DONTWAIT,
+                 addrPtr, addrLen);
   } catch (const std::system_error &e) {
     LOGE("System error in send: %s (code: %d)", e.what(), e.code().value());
     throw JSError(runtime, String::createFromAscii(runtime, e.what()));
@@ -415,9 +442,7 @@ JSI_HOST_FUNCTION(UdpManager::send) {
     throw JSError(runtime, String::createFromAscii(runtime, e.what()));
   }
 
-  if (ret == 0) {
-    throw JSError(runtime, "E_SEND_FAILED");
-  } else if (ret < 0) {
+  if (ret < 0) {
     if (errno == EWOULDBLOCK || errno == EAGAIN) {
       return Value::undefined();
     }
@@ -429,7 +454,7 @@ JSI_HOST_FUNCTION(UdpManager::send) {
 
 JSI_HOST_FUNCTION(UdpManager::getSockName) {
   auto id = static_cast<int>(arguments[0].asNumber());
-  auto fd = idToFdMap[id];
+  auto fd = getFdOrThrow(runtime, id);
   int type = static_cast<int>(arguments[1].asNumber());
 
   auto result = Object(runtime);
@@ -468,7 +493,7 @@ JSI_HOST_FUNCTION(UdpManager::getSockName) {
 
 JSI_HOST_FUNCTION(UdpManager::receive) {
   auto id = static_cast<int>(arguments[0].asNumber());
-  auto fd = idToFdMap[id];
+  auto fd = getFdOrThrow(runtime, id);
 
   // Create a Promise
   auto promiseCtor = runtime.global().getPropertyAsFunction(runtime, "Promise");
@@ -478,13 +503,15 @@ JSI_HOST_FUNCTION(UdpManager::receive) {
           runtime, PropNameID::forAscii(runtime, "executor"), 2,
           [fd, this](Runtime &runtime, const Value &thisValue,
                      const Value *arguments, size_t count) -> Value {
-            struct sockaddr_in in_addr;
-            socklen_t in_len = sizeof(in_addr);
+            struct sockaddr_storage src_addr;
+            socklen_t src_len = sizeof(src_addr);
             auto resolve = arguments[0].asObject(runtime).asFunction(runtime);
             auto reject = arguments[1].asObject(runtime).asFunction(runtime);
 
-            auto recvn = recvfrom(fd, receiveBuffer, sizeof(receiveBuffer), 0,
-                                  (struct sockaddr *)&in_addr, &in_len);
+            auto recvn =
+                recvfrom(fd, receiveBuffer, sizeof(receiveBuffer), 0,
+                         reinterpret_cast<struct sockaddr *>(&src_addr),
+                         &src_len);
 
             if (recvn < 0) {
               if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -514,16 +541,36 @@ JSI_HOST_FUNCTION(UdpManager::receive) {
               memcpy(arrayBuffer.data(runtime), receiveBuffer, recvn);
 
               eventObj.setProperty(runtime, "data", std::move(arrayBuffer));
-              eventObj.setProperty(
-                  runtime, "family",
-                  String::createFromAscii(runtime, in_addr.sin_family == AF_INET
-                                                       ? "IPv4"
-                                                       : "IPv6"));
-              eventObj.setProperty(runtime, "address",
-                                   String::createFromAscii(
-                                       runtime, inet_ntoa(in_addr.sin_addr)));
-              eventObj.setProperty(runtime, "port",
-                                   static_cast<int>(ntohs(in_addr.sin_port)));
+
+              if (src_addr.ss_family == AF_INET) {
+                auto *addr4 =
+                    reinterpret_cast<struct sockaddr_in *>(&src_addr);
+                eventObj.setProperty(
+                    runtime, "family",
+                    String::createFromAscii(runtime, "IPv4"));
+                eventObj.setProperty(
+                    runtime, "address",
+                    String::createFromAscii(runtime,
+                                            inet_ntoa(addr4->sin_addr)));
+                eventObj.setProperty(
+                    runtime, "port",
+                    static_cast<int>(ntohs(addr4->sin_port)));
+              } else {
+                auto *addr6 =
+                    reinterpret_cast<struct sockaddr_in6 *>(&src_addr);
+                char host[INET6_ADDRSTRLEN];
+                inet_ntop(AF_INET6, &addr6->sin6_addr, host,
+                          INET6_ADDRSTRLEN);
+                eventObj.setProperty(
+                    runtime, "family",
+                    String::createFromAscii(runtime, "IPv6"));
+                eventObj.setProperty(
+                    runtime, "address",
+                    String::createFromAscii(runtime, host));
+                eventObj.setProperty(
+                    runtime, "port",
+                    static_cast<int>(ntohs(addr6->sin6_port)));
+              }
 
               resolve.call(runtime, std::move(eventObj));
             }
@@ -535,23 +582,51 @@ JSI_HOST_FUNCTION(UdpManager::receive) {
 }
 
 void UdpManager::suspendAll() {
-  if (!suspendedSockets.empty()) {
-    LOGW("suspendAll called when sockets are already suspended");
+  std::map<int, int> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    snapshot = idToFdMap;
+    idToFdMap.clear();
+  }
+
+  if (snapshot.empty()) {
     return;
   }
 
-  for (const auto &[id, fd] : idToFdMap) {
-    try {
-      SocketState state;
-      state.id = id;
+  std::vector<SocketState> nextSuspendedSockets;
+  nextSuspendedSockets.reserve(snapshot.size());
 
-      struct sockaddr_in addr;
-      socklen_t len = sizeof(addr);
-      if (getsockname(fd, (struct sockaddr *)&addr, &len) == 0) {
-        state.address = inet_ntoa(addr.sin_addr);
-        state.port = ntohs(addr.sin_port);
-        state.type = addr.sin_family == AF_INET ? 4 : 6;
+  for (const auto &[id, fd] : snapshot) {
+    SocketState state{};
+    state.id = id;
 
+    bool capturedState = false;
+    struct sockaddr_storage addrStorage;
+    socklen_t len = sizeof(addrStorage);
+    if (getsockname(fd, reinterpret_cast<struct sockaddr *>(&addrStorage),
+                    &len) == 0) {
+      if (addrStorage.ss_family == AF_INET) {
+        auto *addr = reinterpret_cast<struct sockaddr_in *>(&addrStorage);
+        state.address = inet_ntoa(addr->sin_addr);
+        state.port = ntohs(addr->sin_port);
+        state.type = 4;
+        capturedState = true;
+      } else if (addrStorage.ss_family == AF_INET6) {
+        auto *addr = reinterpret_cast<struct sockaddr_in6 *>(&addrStorage);
+        char host[INET6_ADDRSTRLEN];
+        if (inet_ntop(AF_INET6, &(addr->sin6_addr), host, INET6_ADDRSTRLEN) !=
+            nullptr) {
+          state.address = host;
+          state.port = ntohs(addr->sin6_port);
+          state.type = 6;
+          capturedState = true;
+        }
+      } else {
+        LOGW("Unsupported UDP socket family %d for %d", addrStorage.ss_family,
+             id);
+      }
+
+      if (capturedState) {
         int value;
         socklen_t optlen = sizeof(value);
         if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, &optlen) == 0) {
@@ -563,107 +638,100 @@ void UdpManager::suspendAll() {
         if (getsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, &optlen) == 0) {
           state.broadcast = value;
         }
-
-        suspendedSockets.push_back(state);
-        LOGI("Suspending socket id=%d fd=%d addr=%s port=%d", id, fd,
-             state.address.c_str(), state.port);
-      } else {
-        LOGW("Failed to get socket info for id=%d fd=%d", id, fd);
       }
-
-      ::close(fd);
-    } catch (const std::exception &e) {
-      LOGW("Error suspending socket id=%d: %s", id, e.what());
+    } else {
+      auto error = error_name(errno);
+      LOGW("Failed to snapshot UDP socket %d: %s", id, error.c_str());
     }
+
+    if (capturedState) {
+      nextSuspendedSockets.push_back(std::move(state));
+    }
+
+    ::close(fd);
   }
 
-  idToFdMap.clear();
-
-  LOGI("Suspended %zu sockets", suspendedSockets.size());
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    suspendedSockets.insert(suspendedSockets.end(),
+                            nextSuspendedSockets.begin(),
+                            nextSuspendedSockets.end());
+  }
 }
 
 void UdpManager::resumeAll() {
-  if (suspendedSockets.empty()) {
-    LOGW("resumeAll called but no sockets were suspended");
-    return;
+  std::vector<SocketState> states;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    states.swap(suspendedSockets);
   }
 
-  LOGI("Resuming %zu sockets", suspendedSockets.size());
+  std::vector<std::pair<int, int>> reopenedSockets;
+  reopenedSockets.reserve(states.size());
 
-  for (const auto &state : suspendedSockets) {
-    try {
-      auto newFd = socket(state.type == 4 ? AF_INET : AF_INET6, SOCK_DGRAM, 0);
-      if (newFd <= 0) {
-        LOGE("Failed to create socket for id=%d: %s", state.id,
-             error_name(errno).c_str());
-        continue;
-      }
+  for (const auto &state : states) {
+    auto newFd = socket(state.type == 4 ? AF_INET : AF_INET6, SOCK_DGRAM, 0);
+    if (newFd <= 0) {
+      auto error = error_name(errno);
+      LOGW("Failed to recreate UDP socket %d: %s", state.id, error.c_str());
+      continue;
+    }
 
-      // Set socket timeout
-      struct timeval tv;
-      tv.tv_sec = 0;
-      tv.tv_usec = RECEIVE_TIMEUS;
-      setsockopt(newFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    // Set non-blocking for poll-based I/O
+    fcntl(newFd, F_SETFL, fcntl(newFd, F_GETFL, 0) | O_NONBLOCK);
 
-      if (state.reuseAddr) {
-        int value = 1;
-        setsockopt(newFd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
-      }
-      if (state.reusePort) {
-        int value = 1;
-        setsockopt(newFd, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
-      }
-      if (state.broadcast) {
-        int value = 1;
-        setsockopt(newFd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
-      }
+    if (state.reuseAddr) {
+      int value = 1;
+      setsockopt(newFd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value));
+    }
+    if (state.reusePort) {
+      int value = 1;
+      setsockopt(newFd, SOL_SOCKET, SO_REUSEPORT, &value, sizeof(value));
+    }
+    if (state.broadcast) {
+      int value = 1;
+      setsockopt(newFd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value));
+    }
 
-      bool bindSuccess = false;
+    if (state.type == 4) {
+      struct sockaddr_in addr;
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(state.port);
+      inet_pton(AF_INET, state.address.c_str(), &(addr.sin_addr));
 
-      if (state.type == 4) {
-        struct sockaddr_in addr;
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(state.port);
-        inet_pton(AF_INET, state.address.c_str(), &(addr.sin_addr));
-
-        if (setupIface(newFd, addr) == 0 &&
-            ::bind(newFd, reinterpret_cast<struct sockaddr *>(&addr),
-                   sizeof(addr)) == 0) {
-          bindSuccess = true;
-        } else {
-          LOGW("Failed to bind IPv4 socket id=%d: %s", state.id,
-               error_name(errno).c_str());
-        }
+      if (setupIface(newFd, addr) == 0 &&
+          ::bind(newFd, reinterpret_cast<struct sockaddr *>(&addr),
+                 sizeof(addr)) == 0) {
+        reopenedSockets.emplace_back(state.id, newFd);
       } else {
-        struct sockaddr_in6 addr;
-        addr.sin6_family = AF_INET6;
-        addr.sin6_port = htons(state.port);
-        inet_pton(AF_INET6, state.address.c_str(), &(addr.sin6_addr));
-
-        if (setupIface(newFd, addr) == 0 &&
-            ::bind(newFd, reinterpret_cast<struct sockaddr *>(&addr),
-                   sizeof(addr)) == 0) {
-          bindSuccess = true;
-        } else {
-          LOGW("Failed to bind IPv6 socket id=%d: %s", state.id,
-               error_name(errno).c_str());
-        }
-      }
-
-      if (bindSuccess) {
-        LOGI("Successfully resumed socket id=%d fd=%d", state.id, newFd);
-        idToFdMap[state.id] = newFd;
-      } else {
+        auto error = error_name(errno);
+        LOGW("Failed to restore UDP socket %d: %s", state.id, error.c_str());
         ::close(newFd);
-        LOGE("Failed to resume socket id=%d: %s", state.id,
-             error_name(errno).c_str());
       }
-    } catch (const std::exception &e) {
-      LOGW("Error resuming socket id=%d: %s", state.id, e.what());
+    } else {
+      struct sockaddr_in6 addr;
+      addr.sin6_family = AF_INET6;
+      addr.sin6_port = htons(state.port);
+      inet_pton(AF_INET6, state.address.c_str(), &(addr.sin6_addr));
+
+      if (setupIface(newFd, addr) == 0 &&
+          ::bind(newFd, reinterpret_cast<struct sockaddr *>(&addr),
+                 sizeof(addr)) == 0) {
+        reopenedSockets.emplace_back(state.id, newFd);
+      } else {
+        auto error = error_name(errno);
+        LOGW("Failed to restore UDP socket %d: %s", state.id, error.c_str());
+        ::close(newFd);
+      }
     }
   }
 
-  suspendedSockets.clear();
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto &[id, fd] : reopenedSockets) {
+      idToFdMap[id] = fd;
+    }
+  }
 }
 
 } // namespace jsiudp

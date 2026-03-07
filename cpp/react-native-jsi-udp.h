@@ -4,13 +4,11 @@
 #include <jsi/jsi.h>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <tuple>
 
 #define MAX_PACK_SIZE 65535
-
-// 10us, very short to avoid blocking
-#define RECEIVE_TIMEUS 10
 
 #if __APPLE__
 
@@ -86,7 +84,10 @@ protected:
   JSI_HOST_FUNCTION(getSockName);
   JSI_HOST_FUNCTION(receive);
 
+  int getFdOrThrow(facebook::jsi::Runtime &runtime, int id);
+
 private:
+  std::mutex mutex;
   std::map<int, int> idToFdMap;
   int nextId = 1;
 

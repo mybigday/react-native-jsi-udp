@@ -44,7 +44,7 @@ export class Socket extends EventEmitter {
 
   constructor(options: Options, callback?: Callback) {
     super();
-    if (typeof datagram_create !== 'function') {
+    if (typeof global.datagram_create !== 'function') {
       JsiUdp.install();
     }
     this.state = State.UNBOUND;
@@ -74,23 +74,30 @@ export class Socket extends EventEmitter {
     if (!this._receiving) return;
 
     try {
-      const result = await datagram_receive(this._id);
+      // Drain all available packets before yielding to the event loop
+      while (this._receiving) {
+        const result = await datagram_receive(this._id);
 
-      if (result?.type === 'message') {
-        this.emit('message', Buffer.from(result.data!), {
-          address: result.address,
-          port: result.port,
-          family: result.family,
-        });
-      } else if (result?.type === 'error') {
-        this.emit('error', result.error);
+        if (result?.type === 'message') {
+          this.emit('message', Buffer.from(result.data!), {
+            address: result.address,
+            port: result.port,
+            family: result.family,
+          });
+          continue; // immediately try to read more
+        } else if (result?.type === 'error') {
+          this.emit('error', result.error);
+        }
+        break; // no data available, schedule next poll
       }
     } catch (e) {
       this.emit('error', e);
     }
 
-    // Schedule the next receive operation
-    this._timeoutId = setTimeout(this._receive, 0);
+    // Schedule the next receive poll
+    if (this._receiving) {
+      this._timeoutId = setTimeout(this._receive, 0);
+    }
   };
 
   bind(port?: number, address?: string | Callback, callback?: Callback) {
