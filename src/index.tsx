@@ -44,7 +44,7 @@ export class Socket extends EventEmitter {
 
   constructor(options: Options, callback?: Callback) {
     super();
-    if (typeof global.datagram_create !== 'function') {
+    if (typeof globalThis.datagram_create !== 'function') {
       JsiUdp.install();
     }
     this.state = State.UNBOUND;
