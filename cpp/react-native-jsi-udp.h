@@ -1,14 +1,18 @@
 #pragma once
 #include "helper.h"
+#include <ReactCommon/CallInvoker.h>
 #include <atomic>
+#include <condition_variable>
+#include <functional>
 #include <jsi/jsi.h>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
+#include <set>
 #include <string>
+#include <thread>
 #include <tuple>
-
-#define MAX_PACK_SIZE 65535
 
 #if __APPLE__
 
@@ -64,7 +68,8 @@ struct SocketState {
 
 class UdpManager {
 public:
-  UdpManager(facebook::jsi::Runtime *jsiRuntime);
+  UdpManager(facebook::jsi::Runtime *jsiRuntime,
+             std::shared_ptr<facebook::react::CallInvoker> callInvoker);
   ~UdpManager();
 
   void closeAll();
@@ -73,7 +78,9 @@ public:
 
 protected:
   facebook::jsi::Runtime *_runtime;
+  std::shared_ptr<facebook::react::CallInvoker> _callInvoker;
   std::atomic<bool> _invalidate = false;
+  std::thread eventThread;
 
   JSI_HOST_FUNCTION(create);
   JSI_HOST_FUNCTION(send);
@@ -82,16 +89,31 @@ protected:
   JSI_HOST_FUNCTION(getOpt);
   JSI_HOST_FUNCTION(close);
   JSI_HOST_FUNCTION(getSockName);
-  JSI_HOST_FUNCTION(receive);
 
+  void runOnJS(std::function<void()> &&f);
+
+  void sendEvent(Event event);
+  void receiveEvent();
   int getFdOrThrow(facebook::jsi::Runtime &runtime, int id);
 
+  // poll-based I/O (replaces worker pool busy-polling)
+  void watchFd(int fd);
+  void unwatchFd(int fd);
+  void pollLoop();
+  void wakePoller();
+
 private:
+  std::condition_variable cond;
   std::mutex mutex;
+  std::queue<Event> events;
   std::map<int, int> idToFdMap;
   int nextId = 1;
 
-  char receiveBuffer[MAX_PACK_SIZE];
+  // poll-based I/O
+  std::thread _pollThread;
+  int _wakePipe[2] = {-1, -1};
+  std::set<int> _watchedFds;
+  std::mutex _watchMutex;
 
   std::vector<SocketState> suspendedSockets;
 };

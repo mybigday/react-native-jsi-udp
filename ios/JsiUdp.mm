@@ -2,8 +2,8 @@
 
 #import <React/RCTBridgeModule.h>
 #import <React/RCTBridge+Private.h>
-#import <ReactCommon/RCTTurboModule.h>
 #import <React/RCTEventEmitter.h>
+#import <ReactCommon/RCTTurboModule.h>
 #import <React/RCTUtils.h>
 
 @implementation JsiUdp
@@ -29,15 +29,18 @@ std::shared_ptr<jsiudp::UdpManager> _manager;
 }
 
 // Renamed to avoid duplicate symbol with react-native-worklets-core
-static void installJsiUdpApi(facebook::jsi::Runtime *runtime) {
-  _manager = std::make_shared<jsiudp::UdpManager>(runtime);
+static void installJsiUdpApi(std::shared_ptr<facebook::react::CallInvoker> callInvoker,
+                             facebook::jsi::Runtime *runtime) {
+  _manager =
+      std::make_shared<jsiudp::UdpManager>(runtime, std::move(callInvoker));
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install) {
   RCTBridge *bridge = _bridge ?: [RCTBridge currentBridge];
   RCTCxxBridge *cxxBridge = (RCTCxxBridge *)bridge;
   if (cxxBridge.runtime != nullptr) {
-    installJsiUdpApi((facebook::jsi::Runtime *)cxxBridge.runtime);
+    installJsiUdpApi(bridge.jsCallInvoker,
+                     (facebook::jsi::Runtime *)cxxBridge.runtime);
     return @(true);
   }
   return @(false);
