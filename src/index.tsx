@@ -139,8 +139,10 @@ export class Socket extends EventEmitter {
     if (this.state === State.CLOSED) {
       return;
     }
+    this.state = State.CLOSED;
     if (callback) this.once('close', callback!);
     datagram_close(this._id);
+    delete datagram_callbacks[String(this._id)];
     this.emit('close');
   }
 

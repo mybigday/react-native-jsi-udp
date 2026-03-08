@@ -111,7 +111,7 @@ int setupIface(int fd, struct sockaddr_in &addr) {
   for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
     if (ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_INET &&
         !((ifa->ifa_flags & IFF_LOOPBACK) ^ isLoopback) &&
-        (ifa->ifa_flags & IFF_UP) &&
+        (ifa->ifa_flags & IFF_UP) && (ifa->ifa_flags & IFF_RUNNING) &&
         (isAny || reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr)
                           ->sin_addr.s_addr == addr.sin_addr.s_addr)) {
       auto index = if_nametoindex(ifa->ifa_name);
@@ -139,7 +139,7 @@ int setupIface(int fd, struct sockaddr_in6 &addr) {
   for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
     if (ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_INET6 &&
         !((ifa->ifa_flags & IFF_LOOPBACK) ^ isLoopback) &&
-        (ifa->ifa_flags & IFF_UP) &&
+        (ifa->ifa_flags & IFF_UP) && (ifa->ifa_flags & IFF_RUNNING) &&
         (isAny ||
          memcmp(&(addr.sin6_addr),
                 &(reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr)
