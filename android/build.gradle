@@ -105,6 +105,7 @@ android {
         cppFlags "-O2 -frtti -fexceptions -Wall -fstack-protector-all -std=c++17"
         arguments "-DANDROID_STL=c++_shared",
           "-DANDROID_TOOLCHAIN=clang",
+          "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
           "-DREACT_NATIVE_VERSION=${REACT_NATIVE_VERSION}",
           "-DNODE_MODULES_DIR=${nodeModules}",
           "-DPREBUILT_DIR=${prebuiltDir}"
