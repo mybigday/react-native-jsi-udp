@@ -312,7 +312,10 @@ export default function App() {
     resetResults();
 
     try {
-      for (const suite of testSuites) {
+      const runnableSuites = testSuites.filter(
+        (suite) => !suite.id.startsWith('latency-server')
+      );
+      for (const suite of runnableSuites) {
         for (const test of suite.tests) {
           await runTest(suite, test);
         }
