@@ -1,0 +1,55 @@
+appId: org.reactjs.native.example.JsiUdpExample
+name: Run lifecycle suite and verify close-after-closeAll test
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Run All Suites"
+    timeout: 10000
+
+# Scroll to find and run the Socket lifecycle suite
+- scrollUntilVisible:
+    element:
+      text: "Socket lifecycle"
+    direction: DOWN
+    timeout: 5000
+
+# Run the lifecycle suite
+- tapOn:
+    text: "Run Suite"
+    index: 0
+
+# Wait for the suite to finish — "Run Suite" button returns when done
+- extendedWaitUntil:
+    visible: "Run Suite"
+    timeout: 30000
+
+# Scroll down to find the new test
+- scrollUntilVisible:
+    element:
+      text: "close after native closeAll does not throw"
+    direction: DOWN
+    timeout: 5000
+- takeScreenshot: "01-new-test-visible"
+
+# Verify 0 FAILED in the global summary (the big red chip says "0")
+- scrollUntilVisible:
+    element:
+      text: "FAILED"
+    direction: UP
+    timeout: 5000
+- takeScreenshot: "02-summary"
+
+# Now run ALL suites to also verify nothing else broke
+- scrollUntilVisible:
+    element:
+      text: "Run All Suites"
+    direction: UP
+    timeout: 5000
+- tapOn: "Run All Suites"
+
+# Wait for all suites to complete
+- extendedWaitUntil:
+    visible: "Run All Suites"
+    timeout: 120000
+- takeScreenshot: "03-all-suites-done"

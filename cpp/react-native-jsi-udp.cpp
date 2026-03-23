@@ -434,7 +434,8 @@ JSI_HOST_FUNCTION(UdpManager::close) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = idToFdMap.find(id);
     if (it == idToFdMap.end()) {
-      throw JSError(runtime, "EBADF");
+      // Already closed (e.g. by closeAll/suspendAll), treat as no-op
+      return Value::undefined();
     }
     fd = it->second;
     idToFdMap.erase(it);

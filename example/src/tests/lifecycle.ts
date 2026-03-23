@@ -112,5 +112,37 @@ export const lifecycleSuite: TestSuite = {
         }
       },
     },
+    {
+      id: 'lifecycle-close-after-native-cleanup',
+      name: 'close after native closeAll does not throw',
+      run: async () => {
+        // Simulate the scenario where native closeAll/suspendAll clears the
+        // internal fd map, then JS calls socket.close() during React unmount.
+        const socket = await createBoundSocket('udp4');
+        const port = socket.address().port;
+        let closeEvents = 0;
+        socket.on('close', () => {
+          closeEvents += 1;
+        });
+
+        // Directly call the native close to remove the id from the fd map,
+        // simulating what closeAll/suspendAll does.
+        const datagramClose = Reflect.get(globalThis, 'datagram_close');
+        assert(
+          typeof datagramClose === 'function',
+          'Expected a global datagram_close function'
+        );
+        const socketId = getSocketId(socket);
+        Reflect.apply(datagramClose, globalThis, [socketId]);
+
+        // Now calling socket.close() should not throw — the JS close should
+        // gracefully handle the already-cleaned-up native socket.
+        socket.close();
+        await delay(25);
+        assertEqual(closeEvents, 1, 'Expected close to emit exactly once');
+
+        return `port=${port}, closeEvents=${closeEvents}`;
+      },
+    },
   ],
 };

@@ -1333,7 +1333,7 @@ PODS:
     - React-jsiexecutor
     - React-RCTFBReactNativeSpec
     - ReactCommon/turbomodule/core
-  - react-native-jsi-udp (1.4.0-beta.1):
+  - react-native-jsi-udp (1.4.0-beta.2):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1955,7 +1955,7 @@ SPEC CHECKSUMS:
   React-logger: 8edfcedc100544791cd82692ca5a574240a16219
   React-Mapbuffer: c3f4b608e4a59dd2f6a416ef4d47a14400194468
   React-microtasksnativemodule: 054f34e9b82f02bd40f09cebd4083828b5b2beb6
-  react-native-jsi-udp: b83f439530fae95bed9399c8e9f6aff103b6604f
+  react-native-jsi-udp: 314590983bd7b6be4da676f196bbccafd763061a
   react-native-udp: 7e484efc89db2214f7501ac946781d3205b2c6a0
   React-NativeModulesApple: 2c4377e139522c3d73f5df582e4f051a838ff25e
   React-oscompat: ef5df1c734f19b8003e149317d041b8ce1f7d29c
